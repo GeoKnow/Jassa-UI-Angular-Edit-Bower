@@ -339,7 +339,7 @@ angular.module('ui.jassa.rdf-term-input', [])
 /**
  * Falsy valued arguments will be replaced with empty strings or 0
  */
-var Coordinate = jassa.ext.Class.create({
+var Coordinate = Jassa.ext.Class.create({
     initialize: function(s, p, i, c) {
         this.s = s || '';
         this.p = p || '';
@@ -611,10 +611,11 @@ var processPrefixes = function(talisRdfJson, prefixMapping) {
 };
 
 
-var __defaultPrefixMapping = new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
+//var __defaultPrefixMapping = new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
 
 var createCoordinate = function(scope, component) {
-    var pm = scope.rexPrefixMapping || __defaultPrefixMapping;
+    var pm = scope.rexPrefixMapping || new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
+    //__defaultPrefixMapping;
 
     return new Coordinate(
         pm.expandPrefix(scope.rexSubject),
