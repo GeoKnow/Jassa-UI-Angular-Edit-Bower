@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.1.0 - 2014-12-05
+ * Version: 0.9.0-SNAPSHOT - 2015-01-12
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -83,15 +83,30 @@ angular.module('ui.jassa.rdf-term-input', [])
             });
             //$scope.
 
+//            $scope.onSelectTermType = function(item, model) {
+//              $scope.state.type = model.id;
+//            };
+
+//            $scope.onSelectDatatype = function(item, model) {
+//              $scope.state.datatype = model.id;
+//            };
+//
+//            $scope.onSelectLanguage = function(item, model) {
+//              $scope.state.lang = model.id;
+//            };
+
         }],
         compile: function(ele, attrs) {
             return {
                 pre: function(scope, ele, attrs, ngModel) {
 
+
+
                     var getValidState = function() {
                         var result;
 
                         var state = scope.state;
+                        // {"type":{"id":"http://typedLiteral","displayLabel":"typed"},"value":"297.6","datatype":"http://dbpedia.org/datatype/squareKilometre"}
                         var type = state.type;
                         switch(type) {
                         case vocab.iri:
@@ -113,6 +128,12 @@ angular.module('ui.jassa.rdf-term-input', [])
                                 type: 'literal',
                                 value: state.value,
                                 datatype: state.datatype || jassa.vocab.xsd.xstring.getUri()
+                            };
+                            break;
+                        default:
+                            result = {
+                                type: 'uri',
+                                value: state.value
                             };
                             break;
                         }
@@ -180,19 +201,77 @@ angular.module('ui.jassa.rdf-term-input', [])
                     }, function(talisJson) {
                         //console.log('Got outside change: ', talisJson);
 
-                        if(talisJson) {
-                            var newState = convertToState(talisJson);
+                      if (!talisJson) {
+                      } else {
+                          var newState = convertToState(talisJson);
 
-//                            var newState;
-//                            try {
-//                                newState = convertToState(talisJson);
-//                            } catch(err) {
-//                                newState = {};
-//                            }
+  //                            var newState;
+  //                            try {
+  //                                newState = convertToState(talisJson);
+  //                            } catch(err) {
+  //                                newState = {};
+  //                            }
 
-                            scope.state = newState;
-                            //console.log('ABSORBED', newState, ' from ', talisJson);
-                        }
+                          scope.state = newState;
+
+                          // init value of ui-select-box termtype
+                          for (var i in scope.termTypes) {
+                            if (scope.termTypes[i].id === scope.state.type) {
+                              scope.termTypes.selected = scope.termTypes[i];
+                              break;
+                            }
+                          }
+
+                          // init value of ui-select-box datatype
+                          var matchedDatatype = false;
+                          for (var j in scope.datatypes) {
+                            if (scope.datatypes[j].id === scope.state.datatype) {
+                              scope.datatypes.selected = scope.datatypes[j];
+                              matchedDatatype = true;
+                              break;
+                            }
+                          }
+
+                          // if the datatype is not in hashmap add them
+                          if (!matchedDatatype) {
+                            //TODO: short uri for displayLabel
+                            var prefixMapping = new jassa.rdf.PrefixMappingImpl();
+                            // create new datatype set
+                            var newDatatype = {
+                              id: scope.state.datatype,
+                              displayLabel:  prefixMapping.shortForm(scope.state.datatype)
+                            };
+                            // add new datatype to datatypes
+                            scope.datatypes.push(newDatatype);
+                            // set datatype as selected
+                            scope.datatypes.selected = newDatatype;
+                          }
+
+                          // init value of ui-select-box languages
+                          var matchedLang = false;
+                          for (var k in scope.langs) {
+                            if (scope.langs[k].id === scope.state.lang) {
+                              scope.langs.selected = scope.langs[k];
+                              matchedLang = true;
+                              break;
+                            }
+                          }
+
+                          // if the datatype is not in hashmap add them
+                          if (!matchedLang) {
+                            // create new datatype set
+                            var newLang = {
+                              id: scope.state.lang,
+                              displayLabel: scope.state.lang
+                            };
+                            // add new datatype to datatypes
+                            scope.langs.push(newLang);
+                            // set datatype as selected
+                            scope.langs.selected = newLang;
+                          }
+
+                        //console.log('ABSORBED', newState, ' from ', talisJson);
+                      }
                     }, true);
 
                     //if(modelSetter) {
@@ -257,98 +336,39 @@ angular.module('ui.jassa.rdf-term-input', [])
 
 
 
-
-var RexContext = jassa.ext.Class.create({
-    initialize: function(lookupService) {
-        this.lookupService = lookupService;
-
-        this.sourceGraph = new jassa.rdf.GraphImpl();
-
-        // the status of the resources as retrieved from the lookup service
-        this.cache = new jassa.util.HashMap();
-
-        this.override = new jassa.util.HashMap();
-
-        this.json = {};
-        //this.combined = new MapUnion([this.override, this.cache]);
-        // values
-        // this.overrides = {};
-
+/**
+ * Falsy valued arguments will be replaced with empty strings or 0
+ */
+var Coordinate = jassa.ext.Class.create({
+    initialize: function(s, p, i, c) {
+        this.s = s || '';
+        this.p = p || '';
+        this.i = i || 0;
+        this.c = c || '';
     },
 
-    prefetch: function(subject) {
-        if(this.cache.containsKey(subject)) {
-            // TODO Do something
+    equals: function(that) {
+        var result = this.s === that.s && this.p === that.p && this.i === that.i && this.c === that.c;
+        return result;
+    },
+
+    hashCode: function() {
+        if(this.hash == null) {
+            this.hash =
+                jassa.util.ObjectUtils.hashCodeStr(this.s) +
+                3 * jassa.util.ObjectUtils.hashCodeStr(this.p) +
+                7 * this.i +
+                11 * jassa.util.ObjectUtils.hashCodeStr(this.c);
         }
 
-        // TODO Set a loading flag on the resource
-
-        var self = this;
-        var result = this.lookupService.lookup([subject]).then(function(map) {
-            console.log('Successfully prefetched: ', map);
-            var entries = map.entries();
-            entries.forEach(function(entry) {
-                var dataMap = entry.val.data;
-                self.cache.putMap(dataMap);
-
-                var tmp = assembleTalisRdfJson(dataMap);
-                _(self.json).extend(tmp);
-
-            });
-        });
-
-        return result;
+        return this.hash;
     },
 
-    combinedMap: function() {
-        var subMaps = [this.override, this.cache].filter(function(item) {
-            return item != null;
-        });
-
-        var result = new jassa.util.MapUnion(subMaps);
-
+    toString: function() {
+        var result = this.s + ' ' + this.p + ' ' + this.i + ' ' + this.c;
         return result;
     },
-
-    getValue: function(coordinate) {
-        //var subject = rdf.NodeFactory.createUri(coordinate.s);
-
-        //var c = this.cache.get(subject);
-        //var o = this.override.get(subject);
-
-        //console.log('Cache: ', this.cache);
-
-        var map = this.combinedMap();
-
-        var result = map.get(coordinate);
-
-        //console.log('Retrieved value: ', result, ' for coordinate ', coordinate);
-
-        return result;
-    },
-
-    asTalisJsonRdf: function() {
-        var map = this.combinedMap();
-
-        var result = assembleTalisRdfJson(map);
-        return result;
-    }
 });
-
-
-
-
-/*
-var getModelExpr(attrs, baseAttrName) {
-    var result = attrs[baseAttrName];
-
-    if(!result) {
-
-    }
-
-}
-*/
-
 
 // Prefix str:
 var parsePrefixStr = function(str) {
@@ -365,9 +385,6 @@ var parsePrefixes = function(prefixMapping) {
 
     return result;
 };
-
-
-
 
 
 var getModelAttribute = function(attrs) {
@@ -395,8 +412,9 @@ function capitalize(s)
 
 // TODO We need to expand prefixed values if the termtype is IRI
 
-var createCompileComponent = function($rexComponent$, $component$, $parse) {
+var createCompileComponent = function($rexComponent$, $component$, $parse, oneWay) {
     //var $rexComponent$ = 'rex' + capitalize($component$);
+//if(true) { return; }
 
     var tag = '[' + $component$ + ']';
 
@@ -408,17 +426,23 @@ var createCompileComponent = function($rexComponent$, $component$, $parse) {
             var modelGetter = $parse(modelExprStr);
             var modelSetter = modelGetter.assign;
 
-            var obj = syncAttr($parse, scope, attrs, $rexComponent$);
+            if(!oneWay) {
+                syncAttr($parse, scope, attrs, $rexComponent$);
+            }
 
             var contextCtrl = ctrls[0];
-            var objectCtrl = ctrls[1];
+            //var objectCtrl = ctrls[1];
 
             var slot = contextCtrl.allocSlot();
             slot.entry = {};
 
             scope.$on('$destroy', function() {
+//console.log('Destroying compile component ' + tag);
+
                 slot.release();
             });
+
+//console.log('Start: Creating compile component ' + tag);
 
             // If the coordinate changes, we copy the value at the override's old coordinate to the new coordinate
             scope.$watch(function() {
@@ -427,49 +451,53 @@ var createCompileComponent = function($rexComponent$, $component$, $parse) {
             }, function(newCoordinate, oldCoordinate) {
                 slot.entry.key = newCoordinate;
 
-                var oldValue = scope.rexContext.getValue(oldCoordinate);
+                var oldValue = getEffectiveValue(scope.rexContext, oldCoordinate); //scope.rexContext.getValue(oldCoordinate);
                 if(oldValue) {
                     var entry = {
                         key: newCoordinate,
                         val: oldValue
                     };
 
-                    contextCtrl.getOverride().putEntries([entry]);
+                    //contextCtrl.getOverride().putEntries([entry]);
+                    setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
                 }
             }, true);
 
 
-            scope.$watch(function() {
-                var coordinate = slot.entry.key;
-                var r = scope.rexContext.getValue(coordinate);
-                return r;
+            if(!oneWay) {
+                scope.$watch(function() {
+                    var coordinate = slot.entry.key;
+                    var r = getEffectiveValue(scope.rexContext, coordinate); //scope.rexContext.getValue(coordinate);
+                    return r;
 
-            }, function(value) {
-                var coordinate = slot.entry.key;
+                }, function(value) {
+                    var coordinate = slot.entry.key;
 
-                var entry = {
-                    key: coordinate,
-                    val: value
-                };
+                    var entry = {
+                        key: coordinate,
+                        val: value
+                    };
 
-                //console.log('Value at coordinate ')
-
-                if(value != null) {
-                    contextCtrl.getOverride().putEntries([entry]);
-                }
-
-                slot.entry.value = value;
-
-                if(modelSetter) {
-                    // If the given model is writeable, then we need to update it
-                    // whenever the coordinate's value changes
+                    //console.log('Value at coordinate ')
 
                     if(value != null) {
-                        modelSetter(scope, value);
+                        //contextCtrl.getOverride().putEntries([entry]);
+                        setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
                     }
-                }
 
-            }, true);
+                    slot.entry.value = value;
+
+                    if(modelSetter) {
+                        // If the given model is writeable, then we need to update it
+                        // whenever the coordinate's value changes
+
+                        if(value != null) {
+                            modelSetter(scope, value);
+                        }
+                    }
+
+                }, true);
+            }
 
             // Forwards: If the model changes, we need to update the
             // change object in the scope
@@ -487,46 +515,327 @@ var createCompileComponent = function($rexComponent$, $component$, $parse) {
                 slot.entry.val = newVal;
 
                 if(newVal != null) {
-                    contextCtrl.getOverride().putEntries([entry]);
+                    //contextCtrl.getOverride().putEntries([entry]);
+                    setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
                 }
+//                else {
+//                    // Remove null values
+//                    // TODO Can this happen?
+//                    contextCtrl.getOverride().remove(coordinate);
+//                }
 
                 //console.log(tag + ' Model changed to ', newVal, ' from ', oldVal, ' at coordinate ', coordinate, '; updating override ', slot.entry);
             }, true);
+//console.log('Done: Creating compile component ' + tag);
 
         }
+
     };
 };
 
 var assembleTalisRdfJson = function(map) {
+    //console.log('Assembling talis rdf json');
     var result = {};
 
     var entries = map.entries();
 
     entries.forEach(function(entry) {
         var coordinate = entry.key;
-        var str = entry.val;
 
-        var s = result;
-        var p = s[coordinate.s] = s[coordinate.s] || {};
-        var x = p[coordinate.p] = p[coordinate.p] || [];
-        var o = x[coordinate.i] = x[coordinate.i] || {};
+        var check = new Coordinate(
+            coordinate.s,
+            coordinate.p,
+            coordinate.i,
+            'deleted'
+        );
 
-        o[coordinate.c] = str;
+        var isDeleted = map.get(check);
+
+        if(!isDeleted) {
+            var str = entry.val;
+
+            var s = result;
+            var p = s[coordinate.s] = s[coordinate.s] || {};
+            var x = p[coordinate.p] = p[coordinate.p] || [];
+            var o = x[coordinate.i] = x[coordinate.i] || {};
+
+            o[coordinate.c] = str;
+        }
+    });
+
+
+
+    return result;
+};
+
+/**
+ * In place processing of prefixes in a Talis RDF JSON structure.
+ *
+ * If objects have a prefixMapping attribute, value and datatype fields
+ * are expanded appropriately.
+ *
+ */
+var processPrefixes = function(talisRdfJson, prefixMapping) {
+    var result = {};
+
+    var sMap = talisRdfJson;
+    var ss = Object.keys(sMap);
+    ss.forEach(function(s) {
+        var pMap = sMap[s];
+        var ps = Object.keys(pMap);
+
+        ps.forEach(function(p) {
+           var iArr = pMap[p];
+
+           iArr.forEach(function(cMap) {
+               //var pm = cMap.prefixMapping;
+               var pm = prefixMapping;
+
+               if(pm) {
+                   if(cMap.type === 'uri') {
+                       var val = cMap.value;
+                       cMap.value = pm.expandPrefix(val);
+                   } else if(cMap.type === 'literal' && cMap.datatype != null) {
+                       var datatype = cMap.datatype;
+
+                       cMap.datatype = pm.expandPrefix(datatype);
+                   }
+
+                   //delete cMap['prefixMapping'];
+               }
+           });
+        });
     });
 
     return result;
 };
+
+
 var __defaultPrefixMapping = new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
 
 var createCoordinate = function(scope, component) {
     var pm = scope.rexPrefixMapping || __defaultPrefixMapping;
 
-    return {
-        s: pm.expandPrefix(scope.rexSubject),
-        p: pm.expandPrefix(scope.rexPredicate),
-        i: scope.rexObject,
-        c: component
+    return new Coordinate(
+        pm.expandPrefix(scope.rexSubject),
+        pm.expandPrefix(scope.rexPredicate),
+        scope.rexObject,
+        component
+    );
+};
+
+
+//var _array = {
+//    create: function() {
+//        return [];
+//    },
+//    put: function(arr, index, value) {
+//        data[index] = value;
+//    },
+//    get: function(arr, index) {
+//        return data[index];
+//    },
+//    remove: function(arr, index) {
+//        arr.splice(index, 1);
+//    }
+//};
+//
+//var _obj = {
+//    create: function() {
+//        return {};
+//    },
+//    put: function(obj, key, value) {
+//        obj[key] = value;
+//    },
+//    get: function(obj, key) {
+//        return obj[key];
+//    },
+//    remove: function(arr, key) {
+//        delete obj[key];
+//    }
+//};
+//
+//var rdfSchema = [{
+//    id: 's',
+//    type: _obj
+//}, {
+//    id: 'p'
+//    type: _obj
+//}, {
+//    id: 'i',
+//    type: _array
+//}, {
+//    id: 'c',
+//    type: _obj
+//}
+//];
+//
+//var NestedMap = jassa.ext.Class.create({
+//    /**
+//     * schema: []
+//     */
+//    initialize: function(schema) {
+//        this.schema = schema;
+//    },
+//
+//    put: function(coordinate, value) {
+//
+//    },
+//
+//    get: function(coordinate, value) {
+//
+//    },
+//
+//    remove: function(coordinate) {
+//
+//    }
+//})
+
+
+var talisRdfJsonToEntries = function(talisRdfJson) {
+    var result = [];
+
+    var sMap = talisRdfJson;
+    var ss = Object.keys(sMap);
+    ss.forEach(function(s) {
+        var pMap = sMap[s];
+        var ps = Object.keys(pMap);
+
+        ps.forEach(function(p) {
+           var iArr = pMap[p];
+
+           //for(var i = 0; i < iArr.length; ++i) {
+           var i = 0;
+           iArr.forEach(function(cMap) {
+               var cs = Object.keys(cMap);
+
+               cs.forEach(function(c) {
+                   var val = cMap[c];
+
+                   var coordinate = new Coordinate(s, p, i, c);
+
+                   result.push({
+                       key: coordinate,
+                       val: val
+                   });
+               });
+               ++i;
+           });
+
+        });
+
+    });
+
+    return result;
+};
+
+
+
+// Returns the object array at a given predicate
+var getObjectsAt = function(talisRdfJson, coordinate) {
+    var s = talisRdfJson[coordinate.s];
+    var result = s ? s[coordinate.p] : null;
+    return result;
+};
+
+// Returns the object at a given index
+var getObjectAt = function(talisRdfJson, coordinate) {
+    var p = getObjectsAt(talisRdfJson, coordinate);
+    var result = p ? p[coordinate.i] : null;
+
+    return result;
+};
+
+var getOrCreateObjectAt = function(talisRdfJson, coordinate, obj) {
+    var s = talisRdfJson[coordinate.s] = talisRdfJson[coordinate.s] || {};
+    var p = s[coordinate.p] = s[coordinate.p] || [];
+    var result = p[coordinate.i] = p[coordinate.i] || obj || {};
+    return result;
+};
+
+var removeObjectAt = function(talisRdfJson, coordinate) {
+    var s = talisRdfJson[coordinate.s];
+    var p = s ? s[coordinate.p] : null;
+    //var i = p ? p[coordinate.i] : null;
+
+    if(p) {
+        p.splice(coordinate.i, 1);
+
+        if(p.length === 0) {
+            delete s[coordinate.p];
+        }
+    }
+};
+
+var removeValueAt = function(talisRdfJson, coordinate) {
+
+    var s = talisRdfJson[coordinate.s];
+    var p = s ? s[coordinate.p] : null;
+    var i = p ? p[coordinate.i] : null;
+    //var c = i ? i[coordinate.c] : null;
+
+    if(i) {
+        delete i[coordinate.c];
+
+        if(i.length === 0) {
+            delete p[coordinate.p];
+
+            if(Object.keys(p).length === 0) {
+                delete s[coordinate.s];
+            }
+        }
+    }
+};
+
+var setValueAt = function(talisRdfJson, coordinate, value) {
+    if(value != null) {
+        var o = getOrCreateObjectAt(talisRdfJson, coordinate);
+        o[coordinate.c] = value;
+    }
+};
+
+// TODO Rename to getComponentAt
+var getValueAt = function(talisRdfJson, coordinate) {
+    var i = getObjectAt(talisRdfJson, coordinate);
+    var result = i ? i[coordinate.c] : null;
+
+    return result;
+};
+
+
+var diff = function(before, after) {
+    var result = new jassa.util.HashSet();
+
+    after.forEach(function(item) {
+        var isContained = before.contains(item);
+        if(!isContained) {
+            result.add(item);
+        }
+    });
+
+    return result;
+};
+
+
+var setDiff = function(before, after) {
+
+    var result = {
+        added: diff(before, after),
+        removed: diff(after, before)
     };
+
+    return result;
+};
+
+var getEffectiveValue = function(rexContext, coordinate) {
+    //var result = rexContext.override ? rexContext.override.get(coordinate) : null;
+    var result = rexContext.override ? getValueAt(rexContext.override, coordinate) : null;
+
+    if(result == null) {
+        result = rexContext.json ? getValueAt(rexContext.json, coordinate) : null;
+    }
+
+    return result;
 };
 
 
@@ -561,6 +870,17 @@ var syncAttr = function($parse, $scope, attrs, attrName, deep, transformFn) {
 };
 
 
+var setEleAttrDefaultValue = function(ele, attrs, attrName, defaultValue) {
+    var result = ele.attr(attrName);
+    if(!result) { // includes empty string
+        result = defaultValue;
+        ele.attr(attrName, result);
+
+        var an = attrs.$normalize(attrName);
+        attrs[an] = result;
+    }
+    return result;
+};
 
 
 
@@ -575,17 +895,67 @@ var basePriority = 0;
 
 angular.module('ui.jassa.rex')
 
+/**
+ * Directive to attach a rex lookup function to the scope
+ *
+ * Different lookup functions can be used at different HTML regions under a rex-context.
+ *
+ * If present, rex-subject will use the provided function to perform data lookups
+ * on its IRIs and store the content in the scope
+ *
+ */
+.directive('rexBaseGraph', ['$parse', function($parse) {
+    return {
+        priority: basePriority + 28,
+        restrict: 'A',
+        scope: true,
+        require: 'rexContext',
+        controller: function() {},
+        //require: ['^?rexSubject', '^?rexObject']
+//        controller: ['$scope', function($scope) {
+//        }],
+        compile: function(ele, attrs) {
+            return {
+                pre: function(scope, ele, attrs, ctrls) {
+                    syncAttr($parse, scope, attrs, 'rexBaseGraph');
+
+                    // Watch the reference
+                    scope.$watch(function() {
+                        return scope.rexBaseGraph;
+                    }, function() {
+                        scope.rexContext.baseGraph = scope.rexBaseGraph;
+                    });
+                }
+            };
+        }
+    };
+}])
+
+;
+
+angular.module('ui.jassa.rex')
+
 .directive('rexContext', ['$parse', function($parse) {
     return {
-        priority: basePriority + 20,
+        priority: basePriority + 30,
         restrict: 'A',
         scope: true,
         require: 'rexContext',
         controller: ['$scope', function($scope) {
 
+            $scope.rexContext = $scope.rexContext || {};
+
+            this.$scope = $scope;
+
+
+            //$scope.override = new jassa.util.HashMap();
+
             //this.rexContext = $scope.rexContext;
-            this.getOverride = function() {
-                return $scope.rexContext.override;
+            this.getOverride =    function() {
+                //return $scope.override;
+                var rexContext = $scope.rexContext;
+                var r = rexContext ? rexContext.override : null;
+                return r;
             };
 
 
@@ -627,18 +997,17 @@ angular.module('ui.jassa.rex')
                 var slots = $scope.rexChangeSlots;
                 var slotIds = Object.keys(slots);
 
-                var result = slotIds.map(function(slotId) {
+                var result = new jassa.util.HashSet();
+
+                slotIds.forEach(function(slotId) {
                     var slot = slots[slotId];
                     var entry = slot.entry;
 
-                    return entry ? entry.key : null;
+                    var coordinate = entry ? entry.key : null;
+                    if(coordinate != null) {
+                        result.add(coordinate);
+                    }
                 });
-
-                result = result.filter(function(key) {
-                    return key != null;
-                });
-
-                //console.log('rcs:', scope.rexChangeSlots, ' SlotIds: ', slotIds, ' Coordinates: ', JSON.stringify(result), ' Slots: ', slots);
 
                 return result;
             };
@@ -649,12 +1018,86 @@ angular.module('ui.jassa.rex')
 
         }],
         compile: function(ele, attrs) {
-            //console.log('DA FUQ ON', ele, attrs);
 
+            setEleAttrDefaultValue(ele, attrs, 'rex-context', 'rexContext');
 
             return {
                 pre: function(scope, ele, attrs, ctrl) {
+
+                    // If no context object is provided, we create a new one
+//                    if(!attrs.rexContext) {
+//                        scope.rexContextAnonymous = {};
+//                        //attrs.rexContext = 'rexContextAnonymous';
+//                    }
+
                     syncAttr($parse, scope, attrs, 'rexContext');
+
+
+                    var initContext = function(rexContext) {
+                        rexContext.override = rexContext.override || {};//  new jassa.util.HashMap();
+
+                        rexContext.remove = rexContext.remove || function(coordinate) {
+                            // Removes an object
+                            var objs = getObjectsAt(rexContext.json, coordinate);
+                            if(objs) {
+                                objs.splice(coordinate.i, 1);
+                            }
+
+                            objs = getObjectsAt(rexContext.override, coordinate);
+                            if(objs) {
+                                objs.splice(coordinate.i, 1);
+                            }
+                        };
+
+                    };
+
+                    // Make sure to initialize any provided context object
+                    // TODO: The status should probably be part of the context directive, rather than a context object
+                    scope.$watch(function() {
+                        return scope.rexContext;
+                    }, function(newVal) {
+                        initContext(newVal);
+                    });
+
+                    initContext(scope.rexContext);
+
+                    var getBaseGraph = function() {
+                        var rexContext = scope.rexContext;
+                        var r = rexContext ? rexContext.baseGraph : null;
+                        return r;
+                    };
+
+                    // Synchronize the talis json structure with the graph
+                    // TODO Performance-bottleneck: Synchronize via an event API on the Graph object rather than using Angular's watch mechanism
+                    scope.$watch(function() {
+                        var baseGraph = getBaseGraph();
+                        var r = baseGraph ? baseGraph.hashCode() : null;
+                        return r;
+                    }, function() {
+                        var baseGraph = getBaseGraph();
+                        scope.rexContext.json = baseGraph ? jassa.io.TalisRdfJsonUtils.triplesToTalisRdfJson(baseGraph) : {};
+                    });
+
+
+                    /*
+                    var getComponentValueForNode = function(node, component) {
+                        var json = jassa.rdf.NodeUtils.toTalisRdfJson(node);
+                        var result = json[compononte];
+                        return result;
+                    };
+
+                    // A hacky function that iterates the graph
+                    getValue: function(graph, coordinate) {
+
+                    }
+                    */
+
+
+
+
+
+
+
 
 
                     // TODO Watch any present sourceGraph attribute
@@ -673,35 +1116,36 @@ angular.module('ui.jassa.rex')
 
 
                     // Remove all entries from map that exist in base
-                    var mapDifference = function(map, base) {
-                        var mapEntries = map.entries();
-                        mapEntries.forEach(function(mapEntry) {
-                            var mapKey = mapEntry.key;
-                            var mapVal = mapEntry.val;
-
-                            var baseVal = base.get(mapKey);
-
-                            if(jassa.util.ObjectUtils.isEqual(mapVal, baseVal)) {
-                                map.remove(mapKey);
-                            }
-                        });
-                    };
+//                    var mapDifference = function(map, baseFn) {
+//                        var mapEntries = map.entries();
+//                        mapEntries.forEach(function(mapEntry) {
+//                            var mapKey = mapEntry.key;
+//                            var mapVal = mapEntry.val;
+//
+//                            var baseVal = baseFn(mapKey);
+//
+//                            if(jassa.util.ObjectUtils.isEqual(mapVal, baseVal)) {
+//                                map.remove(mapKey);
+//                            }
+//                        });
+//                    };
 
                     var createDataMap = function(coordinates) {
-                        coordinates = coordinates || ctrl.getReferencedCoordinates();
 
-                        var override = scope.rexContext.override;
+                        //var override = scope.rexContext.override;
+                        var override = ctrl.getOverride();
 
                         //console.log('Override', JSON.stringify(scope.rexContext.override.entries()));
 
-                        var combined = new jassa.util.HashMap();
+                        //var combined = new jassa.util.HashMap();
 
                         //console.log('Coordinates: ', JSON.stringify(coordinates));
                         //var map = new MapUnion([scope.rexContext.override, scope.rex]);
                         var result = new jassa.util.HashMap();
                         coordinates.forEach(function(coordinate) {
-                             var val = scope.rexContext.getValue(coordinate);
-                             result.put(coordinate, val);
+                             //var val = scope.rexContext.getValue(coordinate);
+                            var val = getEffectiveValue(scope.rexContext, coordinate);
+                            result.put(coordinate, val);
                         });
 
                         //console.log('DATA', result.entries());
@@ -709,71 +1153,164 @@ angular.module('ui.jassa.rex')
                         return result;
                     };
 
-                    var updateDerivedValues = function(dataMap) {
-
+                    var updateDerivedValues = function(dataMap, prefixMapping) {
+//console.log('Start update derived');
                         var talis = assembleTalisRdfJson(dataMap);
+                        processPrefixes(talis, prefixMapping);
+
+                        // Update the final RDF graph
+                        var targetGraph = jassa.io.TalisRdfJsonUtils.talisRdfJsonToGraph(talis);
+                        scope.rexContext.graph = targetGraph;
+
+                        scope.rexContext.targetJson = jassa.io.TalisRdfJsonUtils.triplesToTalisRdfJson(targetGraph);
+
+                        // Update the referenced sub graph
+                        var refGraph = new jassa.rdf.GraphImpl();
+                        var coordinates = ctrl.getReferencedCoordinates();
+
+                        var srcJson = scope.rexContext.json;
+
+                        coordinates.forEach(function(coordinate) {
+                            var obj = getObjectAt(srcJson, coordinate);
+                            if(obj != null) {
+                                var o = jassa.rdf.NodeFactory.createFromTalisRdfJson(obj);
+
+                                var s = jassa.rdf.NodeFactory.createUri(coordinate.s);
+                                var p = jassa.rdf.NodeFactory.createUri(coordinate.p);
+
+                                var t = new jassa.rdf.Triple(s, p, o);
+                                refGraph.add(t);
+                            }
+                        });
+
+                        scope.rexContext.srcGraph = refGraph;
+
+                        scope.rexContext.diff = setDiff(refGraph, targetGraph);
+//console.log('End update derived');
+
+
                         //console.log('Talis JSON', talis);
-                        var turtle = jassa.io.TalisRdfJsonUtils.talisRdfJsonToTurtle(talis);
+                        //var turtle = jassa.io.TalisRdfJsonUtils.talisRdfJsonToTurtle(talis);
 
 
-                        var tmp = assembleTalisRdfJson(scope.rexContext.cache);
+                        //var tmp = assembleTalisRdfJson(scope.rexContext.cache);
 
-                        var before = jassa.io.TalisRdfJsonUtils.talisRdfJsonToTriples(tmp).map(function(x) { return '' + x; });
+                        //var before = jassa.io.TalisRdfJsonUtils.talisRdfJsonToTriples(tmp).map(function(x) { return '' + x; });
 
-                        var after = jassa.io.TalisRdfJsonUtils.talisRdfJsonToTriples(talis).map(function(x) { return '' + x; });
-                        var remove = _(before).difference(after);
-                        var added = _(after).difference(before);
+                        //var after = jassa.io.TalisRdfJsonUtils.talisRdfJsonToTriples(talis).map(function(x) { return '' + x; });
+                        //var remove = _(before).difference(after);
+                        //var added = _(after).difference(before);
 
                         //console.log('DIFF: Added: ' + added);
                         //console.log('DIFF: Removed: ' + remove);
 
-                        scope.rexContext.talisJson = turtle;
+                        //scope.rexContext.talisJson = turtle;
                     };
 
 
                     var cleanupOverride = function()
                     {
-                        var override = scope.rexContext.override;
+                        var json = scope.rexContext.json;
+                        var override = ctrl.getOverride();
+                        //var override = scope.rexContext.override;
 
                         // Remove values from override that equal the source data
-                        mapDifference(override, scope.rexContext.cache);
-
-                        // Remove undefined entries from override
-                        var entries = override.entries();
+                        var entries = talisRdfJsonToEntries(override);
                         entries.forEach(function(entry) {
-                            if(entry.val == null) {
-                                override.remove(entry.key);
+                            var coordinate = entry.key;
+                            var val = entry.val;
+
+                            var sourceVal = getValueAt(json, coordinate);
+                            if(sourceVal === val || val == null) {
+                                removeValueAt(override, coordinate);
                             }
                         });
+
+                        /*
+                        mapDifference(override, function(coordinate) {
+                            var r = getValueAt(scope.rexContext.json, coordinate);
+                            return r;
+                        });
+                        */
+
+                        // Remove undefined entries from override
+//                        var entries = override.entries();
+//                        entries.forEach(function(entry) {
+//                            if(entry.val == null) {
+//                                override.remove(entry.key);
+//                            }
+//                        });
                     };
 
 
-                    var cleanupReferences = function(coordinates) {
-                        coordinates = coordinates || ctrl.getReferencedCoordinates();
+                    var cleanupReferences = function(coordinateSet) {
+                        //coordinates = coordinates || ctrl.getReferencedCoordinates();
 
                         //console.log('Referenced coordinates', JSON.stringify(coordinates));
-                        var coordinateSet = jassa.util.SetUtils.arrayToSet(coordinates);
+                        //var coordinateSet = jassa.util.SetUtils.arrayToSet(coordinates);
 
-                        jassa.util.MapUtils.retainKeys(scope.rexContext.override, coordinateSet);
+                        var override = ctrl.getOverride();
+                        //jassa.util.MapUtils.retainKeys(override, coordinateSet);
+                        var entries = talisRdfJsonToEntries(override);
+
+                        entries.forEach(function(entry) {
+                            var coordinate = entry.key;
+                            var isContained = coordinateSet.contains(coordinate);
+                            if(!isContained) {
+                                removeValueAt(override, coordinate);
+                            }
+                        });
+
                         //console.log('Override after cleanup', JSON.stringify(scope.rexContext.override.keys()));
                     };
 
 
+                    var currentCoordinateSet = new jassa.util.HashSet();
+                    /*
+                    var hashCodeArr = function(arr) {
+                        var result = 0;
+                        var l = arr ? arr.length : 0;
+                        for (var i = 0; i < l; i++) {
+                            var item = arr[i];
+                            var hashCode = item.hashCode ? item.hashCode : 127;
+                            result = result * 31 + hashCode;
+                            res = res & res;
+                        }
+
+                        return result;
+                    };
+                    */
+
+                    // TODO The following two $watch's have linear complexity but
+                    // could be optimized if we managed references in a more
+                    // clever way
+
                     // TODO Remove unreferenced values from the override
                     scope.$watch(function() {
-                        return ctrl.getReferencedCoordinates();
-                    }, function(coordinates) {
+                        currentCoordinateSet = ctrl.getReferencedCoordinates();
+
+                        var r = currentCoordinateSet.hashCode();
+                        //console.log('coordinateSetHash: ', r);
+                        return r;
+                    }, function() {
                         //console.log('Override', scope.rexContext.override);
-                        cleanupReferences(coordinates);
+                        cleanupReferences(currentCoordinateSet);
                         cleanupOverride();
                     }, true);
 
+                    var currentDataMap = new jassa.util.HashMap();
+
                     scope.$watch(function() {
-                        var coordinates = ctrl.getReferencedCoordinates();
-                        var r = createDataMap(coordinates);
+                        currentDataMap = createDataMap(currentCoordinateSet);
+                        var r = currentDataMap.hashCode();
+                        //console.log('dataMapHash: ', r);
                         return r;
                     }, function(dataMap) {
-                        updateDerivedValues(dataMap);
+
+                        var rexContext = scope.rexContext;
+                        var prefixMapping = rexContext ? rexContext.prefixMapping : null;
+
+                        updateDerivedValues(currentDataMap, prefixMapping);
                     }, true);
 
 
@@ -862,8 +1399,6 @@ angular.module('ui.jassa.rex')
 
                     // Continue processing any further directives
                     $compile(ele)(scope);
-                },
-                post: function(scope, ele, attrs, ctrls) {
                 }
             };
         }
@@ -922,8 +1457,6 @@ angular.module('ui.jassa.rex')
 
                     // Continue processing any further directives
                     $compile(ele)(scope);
-                },
-                post: function(scope, ele, attrs, ctrls) {
                 }
             };
         }
@@ -945,10 +1478,10 @@ angular.module('ui.jassa.rex')
  */
 .directive('rexLookup', ['$parse', function($parse) {
     return {
-        priority: basePriority + 19,
+        priority: basePriority + 26,
         restrict: 'A',
         scope: true,
-        require: '?rexContext',
+        require: '^rexContext',
         controller: function() {},
         //require: ['^?rexSubject', '^?rexObject']
 //        controller: ['$scope', function($scope) {
@@ -1002,7 +1535,7 @@ angular.module('ui.jassa.rex')
         priority: basePriority + 13,
         restrict: 'A',
         scope: true,
-        require: '^rexPredicate',
+        require: ['^rexContext', '^rexPredicate'],
         controller: function() {},
         compile: function(ele, attrs) {
 
@@ -1021,11 +1554,16 @@ angular.module('ui.jassa.rex')
 
 
             return {
-                pre: function(scope, ele, attrs, predicateCtrl) {
+                pre: function(scope, ele, attrs, ctrls) {
+                    var predicateCtrl = ctrls[1];
+                    var contextCtrl = ctrls[0];
+
                     var i = predicateCtrl.rexObjectScopes.length;
                     if(!attrs['rexObject']) {
                         attrs['rexObject'] = '' + i;
                     }
+
+
                     //console.log('FOOO', attrs);
 
 //console.log('rexObject index: ' + i);
@@ -1041,6 +1579,33 @@ angular.module('ui.jassa.rex')
                         jassa.util.ArrayUtils.removeItemStrict(predicateCtrl.rexObjectScopes, scope);
                     });
 
+
+
+                    // If rexObject is present, we also create a rexRef attribute
+                    var rexRef = function() {
+                        var result = {
+                            s: scope.rexSubject,
+                            p: scope.rexPredicate,
+                            i: scope.rexObject
+                        };
+
+                        return result;
+                    };
+
+                    scope.$watch(function() {
+                        var r = rexRef();
+                        return r;
+                    }, function(newRef) {
+                        scope.rexRef = newRef;
+                    }, true);
+
+                    scope.rexRef = rexRef();
+
+
+                    // Below stuff is deprecated
+                    // Make the prefixes part of the Talis RDF json object
+                    //var cc = createCompileComponent('rexPrefixMapping', 'prefixMapping', $parse, true);
+                    //cc.pre(scope, ele, attrs, ctrls);
                 }
             };
         }
@@ -1076,6 +1641,9 @@ angular.module('ui.jassa.rex')
 
 /**
  * Prefixes
+ *
+ * prefixes must be declared together with the context and cannot be nested
+ *
  */
 .directive('rexPrefix', ['$parse', function($parse) {
     return {
@@ -1083,8 +1651,14 @@ angular.module('ui.jassa.rex')
         restrict: 'A',
         scope: true,
         //require: '^rexContext',
-        controller: function() {},
+        require: 'rexContext',
+        controller: ['$scope', function($scope) {
+            $scope.rexPrefix = $scope.rexPrefix || {};
+        }],
         compile: function(ele, attrs) {
+
+            setEleAttrDefaultValue(ele, attrs, 'rex-prefix', 'rexPrefix');
+
             return {
                 pre: function(scope, ele, attrs, ctrls) {
 
@@ -1121,12 +1695,17 @@ angular.module('ui.jassa.rex')
 //                        }
 
                         scope.rexPrefixMapping = new jassa.rdf.PrefixMappingImpl(scope.rexPrefix);
+
+                        scope.rexContext.prefixMapping = scope.rexPrefixMapping;
                     };
 
                     // Update the prefixMapping when the prefixes change
-                    scope.$watch(function() {
+                    scope.$watchGroup([function() {
                         return scope.rexPrefix;
-                    }, function(rexPrefix) {
+                    }, function() {
+                        return scope.rexContext;
+                    }],
+                    function(rexPrefix) {
                         updatePrefixMapping();
                     }, true);
 
@@ -1143,7 +1722,7 @@ angular.module('ui.jassa.rex')
 
 .directive('rexSubject', ['$parse', '$q', function($parse, $q) {
     return {
-        priority: basePriority + 18,
+        priority: basePriority + 24,
         restrict: 'A',
         scope: true,
         require: '^rexContext',
@@ -1155,10 +1734,12 @@ angular.module('ui.jassa.rex')
                     var subjectUri = syncAttr($parse, scope, attrs, 'rexSubject');
 
                     var doPrefetch = function() {
+                        //console.log('doPrefetch');
+
                         var lookupFn = scope.rexLookup;
                         var subjectUri = scope.rexSubject;
 
-                        if(lookupFn && jassa.util.ObjectUtils.isFunction(lookupFn) && subjectUri) {
+                        if(lookupFn && angular.isFunction(lookupFn) && subjectUri) {
 
                             var pm = scope.rexPrefixMapping;
                             var uri = pm ? pm.expandPrefix(subjectUri) : subjectUri;
@@ -1167,7 +1748,10 @@ angular.module('ui.jassa.rex')
 
                             var promise = scope.rexLookup(s);
                             $q.when(promise).then(function(graph) {
-                                context.sourceGraph.addAll(graph);
+                                var contextScope = contextCtrl.$scope.rexContext;
+                                var baseGraph = contextScope.baseGraph = contextScope.baseGraph || new jassa.rdf.GraphImpl();
+
+                                contextScope.baseGraph.addAll(graph);
                                 // TODO Add the data to the context
                             });
                         }
@@ -1177,23 +1761,29 @@ angular.module('ui.jassa.rex')
 //                        });
                     };
 
-                    scope.$watch(function() {
-                        return scope.rexLookup;
-                    }, function(lookupFn) {
+                    scope.$watchGroup([
+                        function() {
+                            return scope.rexLookup;
+                        }, function() {
+                            return scope.rexSubject;
+                        }, function() {
+                            return scope.rexPrefixMapping;
+                        }
+                    ], function() {
                         doPrefetch();
                     });
 
-                    scope.$watch(function() {
-                        return scope.rexSubject;
-                    }, function(newVal) {
-                        doPrefetch();
-                    });
-
-                    scope.$watch(function() {
-                        return scope.rexPrefixMapping;
-                    }, function(pm) {
-                        doPrefetch();
-                    });
+//                    scope.$watch(function() {
+//                        return scope.rexSubject;
+//                    }, function(newVal) {
+//                        doPrefetch();
+//                    });
+//
+//                    scope.$watch(function() {
+//                        return scope.rexPrefixMapping;
+//                    }, function(pm) {
+//                        doPrefetch();
+//                    });
                 }
             };
         }
@@ -1251,8 +1841,6 @@ angular.module('ui.jassa.rex')
 
                     // Continue processing any further directives
                     $compile(ele)(scope);
-                },
-                post: function(scope, ele, attrs, ctrls) {
                 }
             };
         }
@@ -1347,6 +1935,60 @@ var syncHelper = function(scope, attrs, $parse, $interpolate, sourceAttr, target
 };
 
 angular.module('ui.jassa.sync', []);
+
+angular.module('ui.jassa.sync')
+
+/**
+ * Convenience directive
+ *
+ * sync-template="templateStr"
+ *
+ * implies sync-source="templateStr" sync-interpolate sync-to-target? sync-target?
+ *
+ * if sync-target is not specified, it will try to detect a target based on model attribute names (e.g. ngModel)
+ */
+.directive('syncTemplate', ['$parse', '$compile', function($parse, $compile) {
+    return {
+        priority: basePriority + 1000,
+        restrict: 'A',
+        scope: true,
+        terminal: true,
+        controller: function() {},
+        compile: function(ele, attrs) {
+            return {
+                pre: function(scope, ele, attrs, ctrls) {
+                    var templateStr = ele.attr('sync-template');
+
+                    ele.removeAttr('sync-template');
+
+                    ele.attr('sync-source', templateStr);
+                    ele.attr('sync-source-interpolate', '');
+
+                    if(ele.attr('sync-target') == null) {
+                        var name = getModelAttribute(attrs);
+                        var modelExprStr = attrs[name];
+
+                        if(!modelExprStr) {
+                            throw new Error('No model provided and found');
+                        }
+
+                        ele.attr('sync-target', modelExprStr);
+                    }
+
+                    // TODO Create a function to set attr default values
+                    if(ele.attr('sync-to-target') == null) {
+                        ele.attr('sync-to-target', '');
+                    }
+
+                    // Continue processing any further directives
+                    $compile(ele)(scope);
+                }
+            };
+        }
+    };
+}])
+
+;
 
 angular.module('ui.jassa.sync')
 
