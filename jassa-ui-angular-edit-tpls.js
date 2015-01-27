@@ -2,14 +2,14 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-01-16
+ * Version: 0.9.0-SNAPSHOT - 2015-01-27
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.edit.tpls", "ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
-angular.module("ui.jassa.edit.tpls", ["template/geometry-input/geometry-input.html","template/rdf-term-input/rdf-term-input.html"]);
+angular.module("ui.jassa.edit.tpls", ["template/geometry-input/geometry-input-typeahead.html","template/geometry-input/geometry-input.html","template/rdf-term-input/rdf-term-input.html"]);
 angular.module('ui.jassa.geometry-input', [])
 
-  .directive('geometryInput', ['$http', function($http) {
+  .directive('geometryInput', ['$http', '$q', function($http, $q) {
 
     var uniqueId = 1;
 
@@ -26,6 +26,8 @@ angular.module('ui.jassa.geometry-input', [])
       controller: ['$scope', function($scope) {
         $scope.ngModelOptions = $scope.ngModelOptions || {};
         $scope.geometry = 'point';
+        $scope.isLoading = false;
+
         $scope.getGeocodingInformation = function(searchString, successCallback) {
 
           var url = 'http://nominatim.openstreetmap.org/search/?q='+searchString+'&format=json&polygon_text=1';
@@ -51,30 +53,87 @@ angular.module('ui.jassa.geometry-input', [])
           });
         };
 
-        $scope.fetchResults = function(searchString) {
-          var url = 'http://nominatim.openstreetmap.org/search/?q='+searchString+'&format=json&polygon_text=1';
+        $scope.fetchResultsForEndpoint = function(uri, searchString) {
           return $http({
             'method': 'GET',
-            'url': url,
+            'url': uri+searchString,
             'cache': true,
             'headers' : {
               'Accept': 'application/json',
               'Content-Type': 'application/json'
             }
-          }).then(function(response) {
-            console.log('response', response);
+          });
+        };
+
+        $scope.fetchResults = function(searchString) {
+          // Geocoding APIs
+          var urls = [
+              'http://nominatim.openstreetmap.org/search/?format=json&polygon_text=1&q=',
+              'http://geocoder.cit.api.here.com/6.2/geocode.json?app_id=DemoAppId01082013GAL&app_code=AJKnXv84fjrb0KIHawS0Tg&additionaldata=IncludeShapeLevel,default&mode=retrieveAddresses&searchtext='
+          ];
+
+          // stores promises for each geocoding api
+          var promises = [];
+          for (var i in urls) {
+            promises.push($scope.fetchResultsForEndpoint(urls[i], searchString));
+          }
+
+          // after getting the response then process the response promise
+          var resultPromise = $q.all(promises).then(function(responses){
+
             var results = [];
-            for (var i in response.data) {
-              if (response.data[i].hasOwnProperty('geotext')) {
-                results.push({
-                  'wkt': response.data[i].geotext,
-                  'label': response.data[i].display_name
-                });
+
+            for (var i in responses) {
+              var a = document.createElement('a');
+              a.href = responses[i].config.url;
+
+
+              for (var j in responses[i].data) {
+                // Nominatim
+                if(i==='0') {
+                  if (responses[i].data[j].hasOwnProperty('geotext')) {
+                    results.push({
+                      'firstInGroup': false,
+                      'wkt': responses[i].data[j].geotext,
+                      'label': responses[i].data[j].display_name,
+                      'group': a.hostname
+                    });
+                  }
+                }
+
+                // Nokia HERE Maps Sample
+                if(i==='1') {
+                  if (responses[i].data[j].View.length > 0) {
+                    for(var k in responses[i].data[j].View[0].Result) {
+                      if(responses[i].data[j].View[0].Result[k].Location.hasOwnProperty('Shape')) {
+                        results.push({
+                          'firstInGroup': false,
+                          'wkt': responses[i].data[j].View[0].Result[k].Location.Shape.Value,
+                          'label': responses[i].data[j].View[0].Result[k].Location.Address.Label,
+                          'group': a.hostname
+                        });
+                      }
+                    }
+                  }
+                }
               }
             }
-            console.log('results', results);
+
+            // mark the first of each group for headlines
+            results = _(results).groupBy('group');
+            results = _(results).map(function(g) {
+              g[0].firstInGroup = true;
+              return g;
+            });
+            results = _(results).flatten();
+            results = _(results).value();
+
+            //console.log('results', results);
+
             return results;
           });
+
+          return resultPromise;
         };
 
         $scope.onSelectGeocode = function(item) {
@@ -86,8 +145,6 @@ angular.module('ui.jassa.geometry-input', [])
         return {
           pre: function (scope, ele, attrs) {
             scope.searchString = '';
-
-
 
             var map, drawControls, polygonLayer, panel, wkt, vectors;
 
@@ -113,6 +170,7 @@ angular.module('ui.jassa.geometry-input', [])
               toggleControl();
             });
 
+            /** Disabled
             scope.$watch(function () {
               return scope.searchString;
             }, function (newValue) {
@@ -124,12 +182,12 @@ angular.module('ui.jassa.geometry-input', [])
                     if(data[i].geotext != null) {
                       parseWKT(data[i].geotext);
                     }
-
                   }
                 });
               }
               //scope.searchResults = scope.fetchGeocodingResults(newValue);
             });
+            */
 
             function init() {
               // generate custom map id
@@ -2345,6 +2403,14 @@ angular.module('ui.jassa.sync')
 
 ;
 
+angular.module("template/geometry-input/geometry-input-typeahead.html", []).run(["$templateCache", function($templateCache) {
+  $templateCache.put("template/geometry-input/geometry-input-typeahead.html",
+    "<div class=\"typeahead-group-header\" ng-if=\"match.model.firstInGroup\">Source: {{match.model.group}}</div>\n" +
+    "<a>\n" +
+    "  <span ng-bind-html=\"match.label | typeaheadHighlight:query\"></span>\n" +
+    "</a>");
+}]);
+
 angular.module("template/geometry-input/geometry-input.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/geometry-input/geometry-input.html",
     "<div class=\"geometry-input\" style=\"height:375px;\">\n" +
@@ -2354,8 +2420,19 @@ angular.module("template/geometry-input/geometry-input.html", []).run(["$templat
     "    <input type=\"radio\" value=\"polygon\" name=\"geometry\" ng-model=\"geometry\" /><label>Polygon</label>\n" +
     "    <input type=\"radio\" value=\"box\" name=\"geometry\" ng-model=\"geometry\" /><label>Box</label>\n" +
     "  </div>\n" +
-    "  <input ng-model=\"searchString\" class=\"form-control\" type=\"text\" placeholder=\"Search for a place\"/>\n" +
-    "  <input ng-model=\"searchResult\" placeholder=\"Search for a place (typeahead)\" typeahead-on-select=\"onSelectGeocode($item)\" typeahead=\"item.label as item.label for item in fetchResults($viewValue)\" class=\"form-control\" />\n" +
+    "  <!--input ng-model=\"searchString\" class=\"form-control\" type=\"text\" placeholder=\"Search for a place\"/-->\n" +
+    "  <div class=\"ui icon input loading\" style=\"width: 100%;\">\n" +
+    "    <input ng-model=\"searchString\"\n" +
+    "           placeholder=\"Search for a place (typeahead)\"\n" +
+    "           typeahead-min-length=\"3\"\n" +
+    "           typeahead-wait-ms=\"100\"\n" +
+    "           typeahead-loading=\"isLoading\"\n" +
+    "           typeahead-template-url=\"template/geometry-input/geometry-input-typeahead.html\"\n" +
+    "           typeahead-min-length typeahead-on-select=\"onSelectGeocode($item)\"\n" +
+    "           typeahead=\"item.label as item.label for item in fetchResults($viewValue)\"\n" +
+    "           class=\"form-control\" />\n" +
+    "    <i ng-if=\"isLoading\" class=\"search icon\"></i>\n" +
+    "  </div>\n" +
     "  <div class=\"map\" style=\"width: 100%; height: 300px;\"></div>\n" +
     "</div>");
 }]);
@@ -2376,7 +2453,7 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "\n" +
     "    <!-- Term type selector -->\n" +
     "    <div class=\"input-group-addon\">\n" +
-    "        <ui-select ng-model=\"state.type\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;\" >\n" +
+    "        <ui-select ng-model=\"state.type\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
     "          <ui-select-match placeholder=\"Termtype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "          <ui-select-choices repeat=\"item.id as item in termTypes | filter: $select.search\">\n" +
     "            <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
@@ -2390,7 +2467,7 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "<!--     </span> -->\n" +
     "\n" +
     "    <div ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\" style=\"border-left: 0px;\">\n" +
-    "      <ui-select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;\" >\n" +
+    "      <ui-select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
     "        <ui-select-match placeholder=\"Datatype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "        <!--ui-select-choices repeat=\"item in datatypes | filter: $select.search\" refresh=\"refreshDatatype($select.search)\" refresh-delay=\"100\"-->\n" +
     "        <ui-select-choices repeat=\"item.id as item in datatypes | filter: $select.search\">\n" +
@@ -2406,7 +2483,7 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "<!--     </span> -->\n" +
     "\n" +
     "    <div ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\" style=\"border-left: 0px;\">\n" +
-    "      <ui-select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;\" >\n" +
+    "      <ui-select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px; line-height:0;\" >\n" +
     "        <ui-select-match placeholder=\"Language\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "        <ui-select-choices repeat=\"item.id as item in langs | filter: $select.search\">\n" +
     "          <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
@@ -2417,7 +2494,7 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "    <!--div class=\"input-group-addon\">\n" +
     "\n" +
     "    </div-->\n" +
-    "    <input type=\"text\" class=\"form-control margin-left-1\" style=\"height:52px; margin-left: -1px !important;\" ng-model=\"state.value\" ng-model-options=\"ngModelOptions\">\n" +
+    "    <input type=\"text\" class=\"form-control margin-left-1\" style=\"margin-left: -1px !important;\" ng-model=\"state.value\" ng-model-options=\"ngModelOptions\">\n" +
     "    <span ng-show=\"rightButton\" class=\"input-group-btn\">\n" +
     "      <button class=\"btn btn-default\" type=\"button\">Map</button>\n" +
     "    </span>\n" +
