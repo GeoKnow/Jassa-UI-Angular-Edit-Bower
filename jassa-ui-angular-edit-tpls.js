@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-01-27
+ * Version: 0.9.0-SNAPSHOT - 2015-02-06
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.edit.tpls", "ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -53,10 +53,17 @@ angular.module('ui.jassa.geometry-input', [])
           });
         };
 
-        $scope.fetchResultsForEndpoint = function(uri, searchString) {
+        var createSparqlService = function(url, graphUris) {
+          var result = jassa.service.SparqlServiceBuilder.http(url, graphUris, {type: 'POST'})
+            .cache().virtFix().paginate(1000).pageExpand(100).create();
+
+          return result;
+        };
+
+        $scope.fetchResultsForRestService = function(restServiceConfig, searchString) {
           return $http({
             'method': 'GET',
-            'url': uri+searchString,
+            'url': restServiceConfig.endpoint+searchString,
             'cache': true,
             'headers' : {
               'Accept': 'application/json',
@@ -65,17 +72,83 @@ angular.module('ui.jassa.geometry-input', [])
           });
         };
 
+        $scope.fetchResultsForSparqlService = function(sparqlServiceConfig, searchString) {
+
+          var sparqlService = createSparqlService(sparqlServiceConfig.endpoint, sparqlServiceConfig.graph);
+
+          var store = new jassa.sponate.StoreFacade(sparqlService, _(sparqlServiceConfig.prefix)
+            .defaults(jassa.vocab.InitialContext));
+
+          store.addMap({
+            name: 'sparqlService',
+            template: [{
+              id: '?s',
+              label: '?l', // kann man dann noch besser machen - aber fürs erste passts
+              wkt: '?g',
+              group: '' + sparqlServiceConfig.name
+            }],
+            from: sparqlServiceConfig.query
+          });
+
+          return store.sparqlService.getListService().fetchItems(null, 10);
+        };
+
         $scope.fetchResults = function(searchString) {
           // Geocoding APIs
-          var urls = [
-              'http://nominatim.openstreetmap.org/search/?format=json&polygon_text=1&q=',
-              'http://geocoder.cit.api.here.com/6.2/geocode.json?app_id=DemoAppId01082013GAL&app_code=AJKnXv84fjrb0KIHawS0Tg&additionaldata=IncludeShapeLevel,default&mode=retrieveAddresses&searchtext='
-          ];
+          var sources = {
+            restService: [
+              {
+                name: 'Nominatim',
+                endpoint: 'http://nominatim.openstreetmap.org/search/?format=json&polygon_text=1&q='
+              },
+              {
+                name: 'Nokia HERE',
+                endpoint: 'http://geocoder.cit.api.here.com/6.2/geocode.json?app_id=DemoAppId01082013GAL&app_code=AJKnXv84fjrb0KIHawS0Tg&additionaldata=IncludeShapeLevel,default&mode=retrieveAddresses&searchtext='
+              }
+            ],
+            sparqlService: [
+              {
+                'name' : 'LinkedGeoData (Natural Earth)',
+                'endpoint' : 'http://linkedgeodata.org/vsparql',
+                'graph' : 'http://linkedgeodata.org/ne/',
+                'type' : 'http://linkedgeodata.org/ne/ontology/Country',
+                'active' : false,
+                'facets' : false,
+                'prefix' : {
+                  ogc: 'http://www.opengis.net/ont/geosparql#',
+                  geom: 'http://geovocab.org/geometry#'
+                },
+                'query' : '{'
+                  +' Graph <http://linkedgeodata.org/ne/> {'
+                  +' ?s a <http://linkedgeodata.org/ne/ontology/Country> ;'
+                  +' rdfs:label ?l ;'
+                  +' geom:geometry ['
+                  +'  ogc:asWKT ?g'
+                  +' ] '
+                  +' FILTER regex(?l, "'+ searchString +'") '
+                  +' } '
+                  +'}'
+              }
+            ]
+          };
 
           // stores promises for each geocoding api
           var promises = [];
-          for (var i in urls) {
-            promises.push($scope.fetchResultsForEndpoint(urls[i], searchString));
+          for (var serviceType in sources) {
+            if (serviceType === 'restService') {
+              for(var r in sources.restService) {
+                var restService = sources.restService[r];
+                  promises.push($scope.fetchResultsForRestService(restService, searchString));
+              }
+            }
+
+            if (serviceType === 'sparqlService') {
+              for(var s in sources.sparqlService) {
+                var sparqlService = sources.sparqlService[s];
+                promises.push($scope.fetchResultsForSparqlService(sparqlService, searchString));
+              }
+            }
+
           }
 
           // after getting the response then process the response promise
@@ -84,25 +157,26 @@ angular.module('ui.jassa.geometry-input', [])
             var results = [];
 
             for (var i in responses) {
+              // used to grab the hostname a.href = url -> a.hostname
               var a = document.createElement('a');
-              a.href = responses[i].config.url;
-
 
               for (var j in responses[i].data) {
                 // Nominatim
                 if(i==='0') {
+                  a.href = responses[i].config.url;
                   if (responses[i].data[j].hasOwnProperty('geotext')) {
                     results.push({
                       'firstInGroup': false,
                       'wkt': responses[i].data[j].geotext,
                       'label': responses[i].data[j].display_name,
-                      'group': a.hostname
+                      'group': sources.restService[i].name || a.hostname
                     });
                   }
                 }
 
                 // Nokia HERE Maps Sample
                 if(i==='1') {
+                  a.href = responses[i].config.url;
                   if (responses[i].data[j].View.length > 0) {
                     for(var k in responses[i].data[j].View[0].Result) {
                       if(responses[i].data[j].View[0].Result[k].Location.hasOwnProperty('Shape')) {
@@ -110,10 +184,24 @@ angular.module('ui.jassa.geometry-input', [])
                           'firstInGroup': false,
                           'wkt': responses[i].data[j].View[0].Result[k].Location.Shape.Value,
                           'label': responses[i].data[j].View[0].Result[k].Location.Address.Label,
-                          'group': a.hostname
+                          'group': sources.restService[i].name || a.hostname
                         });
                       }
                     }
+                  }
+                }
+              }
+
+              // LinkedGeoData
+              if(i==='2') {
+                if (responses[i].length > 0) {
+                  for(var l in responses[i]) {
+                    results.push({
+                      'firstInGroup': false,
+                      'wkt': responses[i][l].val.wkt,
+                      'label': responses[i][l].val.label,
+                      'group': responses[i][l].val.group
+                    });
                   }
                 }
               }
@@ -2405,7 +2493,7 @@ angular.module('ui.jassa.sync')
 
 angular.module("template/geometry-input/geometry-input-typeahead.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/geometry-input/geometry-input-typeahead.html",
-    "<div class=\"typeahead-group-header\" ng-if=\"match.model.firstInGroup\">Source: {{match.model.group}}</div>\n" +
+    "<div class=\"typeahead-group-header\" ng-if=\"match.model.firstInGroup\"><strong>Source:</strong> <em>{{match.model.group}}</em></div>\n" +
     "<a>\n" +
     "  <span ng-bind-html=\"match.label | typeaheadHighlight:query\"></span>\n" +
     "</a>");
@@ -2452,7 +2540,7 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "<!--     </div> -->\n" +
     "\n" +
     "    <!-- Term type selector -->\n" +
-    "    <div class=\"input-group-addon\">\n" +
+    "    <div class=\"input-group-addon\" style=\"padding: 0px 0px !important;\">\n" +
     "        <ui-select ng-model=\"state.type\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
     "          <ui-select-match placeholder=\"Termtype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "          <ui-select-choices repeat=\"item.id as item in termTypes | filter: $select.search\">\n" +
@@ -2466,7 +2554,7 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "<!--         <select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-options=\"item.id as item.displayLabel for item in datatypes\"></select> -->\n" +
     "<!--     </span> -->\n" +
     "\n" +
-    "    <div ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\" style=\"border-left: 0px;\">\n" +
+    "    <div ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
     "      <ui-select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
     "        <ui-select-match placeholder=\"Datatype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "        <!--ui-select-choices repeat=\"item in datatypes | filter: $select.search\" refresh=\"refreshDatatype($select.search)\" refresh-delay=\"100\"-->\n" +
@@ -2482,7 +2570,7 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "<!--         <select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-options=\"item.id as item.displayLabel for item in langs\"></select> -->\n" +
     "<!--     </span> -->\n" +
     "\n" +
-    "    <div ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\" style=\"border-left: 0px;\">\n" +
+    "    <div ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
     "      <ui-select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px; line-height:0;\" >\n" +
     "        <ui-select-match placeholder=\"Language\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "        <ui-select-choices repeat=\"item.id as item in langs | filter: $select.search\">\n" +
