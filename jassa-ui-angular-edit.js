@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-02-06
+ * Version: 0.9.0-SNAPSHOT - 2015-02-10
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -124,7 +124,7 @@ angular.module('ui.jassa.geometry-input', [])
                   +' geom:geometry ['
                   +'  ogc:asWKT ?g'
                   +' ] '
-                  +' FILTER regex(?l, "'+ searchString +'") '
+                  +' FILTER regex(?l, "'+ searchString +'", "i") '
                   +' } '
                   +'}'
               }
@@ -434,6 +434,7 @@ angular.module('ui.jassa.geometry-input', [])
       }
     };
   }]);
+
 angular.module('ui.jassa.rdf-term-input', [])
 
 .directive('rdfTermInput', ['$parse', function($parse) {
