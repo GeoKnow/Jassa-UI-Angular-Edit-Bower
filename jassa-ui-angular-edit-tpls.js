@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-02-10
+ * Version: 0.9.0-SNAPSHOT - 2015-02-23
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.edit.tpls", "ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -21,7 +21,8 @@ angular.module('ui.jassa.geometry-input', [])
       replace: true,
       scope: {
         bindModel: '=ngModel',
-        ngModelOptions: '=?'
+        ngModelOptions: '=?',
+        geocodingServices: '=geocodingServices'
       },
       controller: ['$scope', function($scope) {
         $scope.ngModelOptions = $scope.ngModelOptions || {};
@@ -79,6 +80,8 @@ angular.module('ui.jassa.geometry-input', [])
           var store = new jassa.sponate.StoreFacade(sparqlService, _(sparqlServiceConfig.prefix)
             .defaults(jassa.vocab.InitialContext));
 
+          var query = sparqlServiceConfig.query.replace(/%SEARCHSTRING%/gi,searchString);
+
           store.addMap({
             name: 'sparqlService',
             template: [{
@@ -87,7 +90,7 @@ angular.module('ui.jassa.geometry-input', [])
               wkt: '?g',
               group: '' + sparqlServiceConfig.name
             }],
-            from: sparqlServiceConfig.query
+            from: query
           });
 
           return store.sparqlService.getListService().fetchItems(null, 10);
@@ -133,26 +136,48 @@ angular.module('ui.jassa.geometry-input', [])
           };
 
           // stores promises for each geocoding api
-          var promises = [];
-          for (var serviceType in sources) {
+          var promiseCache = {
+            promisesMetaInformation: {
+              /**
+               * [{
+               *   name: x,
+               *   promiseID: y
+               * }]
+               */
+              restService: [],
+              sparqlService: []
+            },
+            promises: []
+          };
+          for (var serviceType in $scope.geocodingServices) {
             if (serviceType === 'restService') {
               for(var r in sources.restService) {
                 var restService = sources.restService[r];
-                  promises.push($scope.fetchResultsForRestService(restService, searchString));
+                promiseCache.promisesMetaInformation.restService.push({
+                  name: restService.name,
+                  id: promiseCache.promises.length
+                });
+                promiseCache.promises.push($scope.fetchResultsForRestService(restService, searchString));
               }
             }
 
             if (serviceType === 'sparqlService') {
               for(var s in sources.sparqlService) {
                 var sparqlService = sources.sparqlService[s];
-                promises.push($scope.fetchResultsForSparqlService(sparqlService, searchString));
+                promiseCache.promisesMetaInformation.sparqlService.push({
+                  name: sparqlService.name,
+                  id: promiseCache.promises.length
+                });
+                promiseCache.promises.push($scope.fetchResultsForSparqlService(sparqlService, searchString));
               }
             }
 
           }
 
           // after getting the response then process the response promise
-          var resultPromise = $q.all(promises).then(function(responses){
+          var resultPromise = $q.all(promiseCache.promises).then(function(responses){
+
+            console.log('promiseCache', promiseCache);
 
             var results = [];
 
@@ -169,7 +194,7 @@ angular.module('ui.jassa.geometry-input', [])
                       'firstInGroup': false,
                       'wkt': responses[i].data[j].geotext,
                       'label': responses[i].data[j].display_name,
-                      'group': sources.restService[i].name || a.hostname
+                      'group': $scope.geocodingServices.restService[i].name || a.hostname
                     });
                   }
                 }
@@ -184,7 +209,7 @@ angular.module('ui.jassa.geometry-input', [])
                           'firstInGroup': false,
                           'wkt': responses[i].data[j].View[0].Result[k].Location.Shape.Value,
                           'label': responses[i].data[j].View[0].Result[k].Location.Address.Label,
-                          'group': sources.restService[i].name || a.hostname
+                          'group': $scope.geocodingServices.restService[i].name || a.hostname
                         });
                       }
                     }
@@ -516,33 +541,19 @@ angular.module('ui.jassa.rdf-term-input', [])
                     displayLabel: jassa.util.UriUtils.extractLabel(id)
                 };
             });
-            //$scope.
 
-//            $scope.onSelectTermType = function(item, model) {
-//              $scope.state.type = model.id;
-//            };
+            $scope.addLanguage = function(newLanguageValue) {
+              return {
+                id: newLanguageValue,
+                displayLabel: newLanguageValue
+              };
+            };
 
-//            $scope.onSelectDatatype = function(item, model) {
-//              $scope.state.datatype = model.id;
-//            };
-//
-//            $scope.onSelectLanguage = function(item, model) {
-//              $scope.state.lang = model.id;
-//            };
-
-            $scope.refreshDatatype = function(newDatatypeValue) {
-              console.log('new Datatype', newDatatypeValue);
-              /*
-              var newDatatype = {
+            $scope.addDatatype = function(newDatatypeValue) {
+              return {
                 id: newDatatypeValue,
                 displayLabel: newDatatypeValue
               };
-              // add new datatype to datatypes
-              $scope.datatypes.push(newDatatype);
-              // set datatype as selected
-              $scope.datatypes.selected = newDatatype;
-              $scope.state.datatype = newDatatypeValue;
-              */
             };
 
         }],
@@ -2510,7 +2521,8 @@ angular.module("template/geometry-input/geometry-input.html", []).run(["$templat
     "    <input type=\"radio\" value=\"box\" name=\"geometry\" ng-model=\"geometry\" /><label>Box</label>\n" +
     "  </div>\n" +
     "  <!--input ng-model=\"searchString\" class=\"form-control\" type=\"text\" placeholder=\"Search for a place\"/-->\n" +
-    "  <div class=\"ui icon input loading\" style=\"width: 100%;\">\n" +
+    "\n" +
+    "  <div style=\"width: 100%; position: relative;\">\n" +
     "    <input ng-model=\"searchString\"\n" +
     "           placeholder=\"Search for a place (typeahead)\"\n" +
     "           typeahead-min-length=\"3\"\n" +
@@ -2520,75 +2532,48 @@ angular.module("template/geometry-input/geometry-input.html", []).run(["$templat
     "           typeahead-min-length typeahead-on-select=\"onSelectGeocode($item)\"\n" +
     "           typeahead=\"item.label as item.label for item in fetchResults($viewValue)\"\n" +
     "           class=\"form-control\" />\n" +
-    "    <i ng-if=\"isLoading\" class=\"search icon\"></i>\n" +
+    "    <div ng-if=\"isLoading\" class=\"spinner\">\n" +
+    "      <div class=\"double-bounce1\"></div>\n" +
+    "      <div class=\"double-bounce2\"></div>\n" +
+    "    </div>\n" +
     "  </div>\n" +
+    "\n" +
     "  <div class=\"map\" style=\"width: 100%; height: 300px;\"></div>\n" +
     "</div>");
 }]);
 
 angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/rdf-term-input/rdf-term-input.html",
-    "<div>\n" +
-    "  <div class=\"input-group\">\n" +
-    "\n" +
-    "    <!-- First input addon -->\n" +
-    "    <!-- TODO Make content configurable -->\n" +
-    "    <!--     <span class=\"input-group-addon\"><span class=\"glyphicon glyphicon-link\"></span></span> -->\n" +
-    "    <span class=\"input-group-addon\" ng-bind-html=\"logo\"></span>\n" +
-    "\n" +
-    "<!--     <div class=\"input-group-addon\"> -->\n" +
-    "<!--         <select ng-model=\"state.type\"  ng-options=\"item.id as item.displayLabel for item in termTypes\" ng-change=\"ensureValidity()\"></select> -->\n" +
-    "<!--     </div> -->\n" +
-    "\n" +
-    "    <!-- Term type selector -->\n" +
-    "    <div class=\"input-group-addon\" style=\"padding: 0px 0px !important;\">\n" +
-    "        <ui-select ng-model=\"state.type\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
-    "          <ui-select-match placeholder=\"Termtype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
-    "          <ui-select-choices repeat=\"item.id as item in termTypes | filter: $select.search\">\n" +
-    "            <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
-    "          </ui-select-choices>\n" +
-    "        </ui-select>\n" +
-    "    </div>\n" +
-    "\n" +
-    "    <!-- Datatype selector -->\n" +
-    "<!--     <span ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\"> -->\n" +
-    "<!--         <select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-options=\"item.id as item.displayLabel for item in datatypes\"></select> -->\n" +
-    "<!--     </span> -->\n" +
-    "\n" +
-    "    <div ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
-    "      <ui-select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
-    "        <ui-select-match placeholder=\"Datatype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
-    "        <!--ui-select-choices repeat=\"item in datatypes | filter: $select.search\" refresh=\"refreshDatatype($select.search)\" refresh-delay=\"100\"-->\n" +
-    "        <ui-select-choices repeat=\"item.id as item in datatypes | filter: $select.search\">\n" +
-    "          <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
-    "        </ui-select-choices>\n" +
-    "      </ui-select>\n" +
-    "    </div>\n" +
-    "\n" +
-    "\n" +
-    "    <!-- Language selector -->\n" +
-    "<!--     <span ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\"> -->\n" +
-    "<!--         <select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-options=\"item.id as item.displayLabel for item in langs\"></select> -->\n" +
-    "<!--     </span> -->\n" +
-    "\n" +
-    "    <div ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
-    "      <ui-select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px; line-height:0;\" >\n" +
-    "        <ui-select-match placeholder=\"Language\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
-    "        <ui-select-choices repeat=\"item.id as item in langs | filter: $select.search\">\n" +
-    "          <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
-    "        </ui-select-choices>\n" +
-    "      </ui-select>\n" +
-    "    </div>\n" +
-    "\n" +
-    "    <!--div class=\"input-group-addon\">\n" +
-    "\n" +
-    "    </div-->\n" +
-    "    <input type=\"text\" class=\"form-control margin-left-1\" style=\"margin-left: -1px !important;\" ng-model=\"state.value\" ng-model-options=\"ngModelOptions\">\n" +
-    "    <span ng-show=\"rightButton\" class=\"input-group-btn\">\n" +
-    "      <button class=\"btn btn-default\" type=\"button\">Map</button>\n" +
-    "    </span>\n" +
+    "<div class=\"input-group\">\n" +
+    "  <!-- Term type selector -->\n" +
+    "  <div class=\"input-group-addon\" style=\"padding: 0px 0px !important;\">\n" +
+    "    <ui-select ng-model=\"state.type\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
+    "      <ui-select-match placeholder=\"Termtype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
+    "      <ui-select-choices repeat=\"item.id as item in termTypes | filter: $select.search\">\n" +
+    "        <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
+    "      </ui-select-choices>\n" +
+    "    </ui-select>\n" +
     "  </div>\n" +
-    "  <div ng-transclude></div>\n" +
-    "</div>\n" +
-    "");
+    "  <!-- Datatype selector -->\n" +
+    "  <div ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
+    "    <ui-select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\" tagging=\"addDatatype\" reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
+    "      <ui-select-match placeholder=\"Datatype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
+    "      <!--ui-select-choices repeat=\"item in datatypes | filter: $select.search\" refresh=\"refreshDatatype($select.search)\" refresh-delay=\"100\"-->\n" +
+    "      <ui-select-choices repeat=\"item.id as item in datatypes | filter: $select.search\">\n" +
+    "        <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
+    "      </ui-select-choices>\n" +
+    "    </ui-select>\n" +
+    "  </div>\n" +
+    "  <!-- Language selector -->\n" +
+    "  <div ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
+    "    <ui-select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\" tagging=\"addLanguage\" reset-search-input=\"false\" style=\"width: 100px; line-height:0;\" >\n" +
+    "      <ui-select-match placeholder=\"Language\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
+    "      <ui-select-choices repeat=\"item.id as item in langs | filter: $select.search\">\n" +
+    "        <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
+    "      </ui-select-choices>\n" +
+    "    </ui-select>\n" +
+    "  </div>\n" +
+    "  <!-- Input -->\n" +
+    "  <input type=\"text\" class=\"form-control margin-left-1\" style=\"margin-left: -1px !important;\" ng-model=\"state.value\" ng-model-options=\"ngModelOptions\">\n" +
+    "</div>");
 }]);
