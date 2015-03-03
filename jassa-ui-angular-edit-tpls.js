@@ -478,7 +478,7 @@ angular.module('ui.jassa.rdf-term-input', [])
         //transclude: true,
         require: '^ngModel',
         templateUrl: 'template/rdf-term-input/rdf-term-input.html',
-        //replace: true,
+        replace: true,
         //scope: true,
         scope: {
             //ngModel: '=',
@@ -879,6 +879,11 @@ function capitalize(s)
 
 // TODO We need to expand prefixed values if the termtype is IRI
 
+/**
+ *
+ * @param oneWay If true, the model is not updated on rexContext changes for the respective coordinate
+ *
+ */
 var createCompileComponent = function($rexComponent$, $component$, $parse, oneWay) {
     //var $rexComponent$ = 'rex' + capitalize($component$);
 //if(true) { return; }
@@ -898,6 +903,9 @@ var createCompileComponent = function($rexComponent$, $component$, $parse, oneWa
             }
 
             var contextCtrl = ctrls[0];
+
+            // ngModel Used for pristine/dirty checking
+            var ngModel = ctrls[2];
             //var objectCtrl = ctrls[1];
 
             var slot = contextCtrl.allocSlot();
@@ -911,26 +919,49 @@ var createCompileComponent = function($rexComponent$, $component$, $parse, oneWa
 
 //console.log('Start: Creating compile component ' + tag);
 
-            // If the coordinate changes, we copy the value at the override's old coordinate to the new coordinate
+            // If the coordinate changes AND the model is not pristine,
+            // we copy the value at the override's old coordinate to the new coordinate
+            // This way we ensure we are not overwriting a user's input
+            // Otherwise (if the model is pristine), just set the model to the value of the current base data
             scope.$watch(function() {
                 var r = createCoordinate(scope, $component$);
                 return r;
             }, function(newCoordinate, oldCoordinate) {
+                // Tell the context the coordinate we are referring to
                 slot.entry.key = newCoordinate;
 
-                var oldValue = getEffectiveValue(scope.rexContext, oldCoordinate); //scope.rexContext.getValue(oldCoordinate);
-                if(oldValue) {
-                    var entry = {
-                        key: newCoordinate,
-                        val: oldValue
-                    };
+                if(!ngModel || !ngModel.$pristine) {
 
-                    //contextCtrl.getOverride().putEntries([entry]);
-                    setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
+                    var oldValue = getEffectiveValue(scope.rexContext, oldCoordinate); //scope.rexContext.getValue(oldCoordinate);
+                    if(oldValue) {
+                        var entry = {
+                            key: newCoordinate,
+                            val: oldValue
+                        };
+
+                        //contextCtrl.getOverride().putEntries([entry]);
+                        setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
+                    }
+                } else {
+                    // If the model is pristine, we do not update the override
+                    // instead we set the model to the source value for the given coordinate
+                    if(modelSetter) {
+                        // If the given model is writeable, then we need to update it
+                        // whenever the coordinate's value changes
+
+                        var value = getValueAt(scope.rexContext.json, newCoordinate);
+//                        if(value == null) {
+//                            value = '';
+//                        }
+                        modelSetter(scope, value);
+                    }
+
                 }
             }, true);
 
 
+            // If the effective value at a coordinate changes, update the model
+            // Note: By default, if the effective value equals the source data, we reset the pristine flag
             if(!oneWay) {
                 scope.$watch(function() {
                     var coordinate = slot.entry.key;
@@ -963,11 +994,35 @@ var createCompileComponent = function($rexComponent$, $component$, $parse, oneWa
                         }
                     }
 
+                    var isEmpty = function(str) {
+                        return str == null || str === '';
+                    };
+
+                    // Note: If the effective value equals the source value, we reset the pristine flag
+                    // This way, if the user manually restores changes to a value, the model is considered clean again
+                    //  Right now, we treat null and '' as equivalent.
+                    // ISSUE: Now, we have the undesired effect, that if fields of a resource map to parts of its URI,
+                    // then once data for the URI is retrieved, then the data that is input into the field then matches the data retrieved
+                    // caused the field to be considered pristine - hence, editing any of the fields the URI depends on will
+                    // cause all other fields to go blank again
+                    // I see the following options:
+                    // - We introduce a flag whether equal values count as pristine; e.g. rex-pristine-on-equals
+                    //   Note that this seems similar to the masterValue concept of https://github.com/betsol/angular-input-modified
+                    // - In the form there have to be buttons for resetting the pristine state explicitly
+                    // Anyway, for now we disable the following snipped
+//                    if(ngModel) {
+//                        var srcValue = getValueAt(scope.rexContext.json, coordinate);
+//                        if(srcValue === value || isEmpty(srcValue) && isEmpty(value)) {
+//                            ngModel.$setPristine();
+//                        }
+//                    }
+
                 }, true);
             }
 
-            // Forwards: If the model changes, we need to update the
-            // change object in the scope
+            // TODO: Probably outdated: Forwards: If the model changes, we need to update the change object in the scope
+
+            // If the model value changes, we need to update the override to reflect this
             scope.$watch(function() {
                 var r = modelGetter(scope);
 
@@ -1421,15 +1476,39 @@ angular.module('ui.jassa.rex')
                 return result;
             };
 
-
-            this.getReferencedCoordinates = function() {
+            this.getSlots = function() {
                 var slots = $scope.rexChangeSlots;
                 var slotIds = Object.keys(slots);
 
+                var result = slotIds.map(function(slotId) {
+                    var slot = slots[slotId];
+                    return slot;
+                });
+
+                return result;
+            };
+
+            // Iterate all slots and create a graph from all .triples attributes
+            this.getEnforcedGraph = function() {
+                var result = new jassa.rdf.GraphImpl();
+                var slots = this.getSlots();
+                slots.forEach(function(slot) {
+                    var triples = slot.triples;
+
+                    if(triples) {
+                        result.addAll(triples);
+                    }
+                });
+
+                return result;
+            };
+
+            // Iterate all slots and collect referenced coordinates
+            this.getReferencedCoordinates = function() {
                 var result = new jassa.util.HashSet();
 
-                slotIds.forEach(function(slotId) {
-                    var slot = slots[slotId];
+                var slots = this.getSlots();
+                slots.forEach(function(slot) {
                     var entry = slot.entry;
 
                     var coordinate = entry ? entry.key : null;
@@ -1487,7 +1566,7 @@ angular.module('ui.jassa.rex')
                             //setObjectAt(rexContext.override, coordinate, value) {
                         };
                         */
-
+/* TODO I think it is not used anymore, but code left here for reference
                         rexContext.addObject = function(_s, _p, sourceObj) {
                             var pm = scope.rexPrefixMapping || new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
                             //__defaultPrefixMapping;
@@ -1511,7 +1590,7 @@ angular.module('ui.jassa.rex')
                             angular.copy(sourceObj, targetObj);
                             //setObjectAt(rexContext.override, coordinate, value) {
                         };
-
+*/
 
                     };
 
@@ -1617,13 +1696,33 @@ angular.module('ui.jassa.rex')
                         return result;
                     };
 
+                    var dataMapToGraph = function(dataMap, prefixMapping) {
+                        var talis = assembleTalisRdfJson(dataMap);
+                        processPrefixes(talis, prefixMapping);
+
+                        // Update the final RDF graph
+                        var result = jassa.io.TalisRdfJsonUtils.talisRdfJsonToGraph(talis);
+                        return result;
+                    };
+
                     var updateDerivedValues = function(dataMap, prefixMapping) {
 //console.log('Start update derived');
+                        /*
                         var talis = assembleTalisRdfJson(dataMap);
                         processPrefixes(talis, prefixMapping);
 
                         // Update the final RDF graph
                         var targetGraph = jassa.io.TalisRdfJsonUtils.talisRdfJsonToGraph(talis);
+                        */
+                        var targetGraph = dataMapToGraph(dataMap, prefixMapping);
+
+                        var enforcedGraph = ctrl.getEnforcedGraph();
+                        // TODO Remove from enforcedGraph those triples that are already present in the source data
+                        //enforcedGraph.removeAll();
+                        targetGraph.addAll(enforcedGraph);
+
+
+
                         scope.rexContext.graph = targetGraph;
 
                         scope.rexContext.targetJson = jassa.io.TalisRdfJsonUtils.triplesToTalisRdfJson(targetGraph);
@@ -1793,7 +1892,7 @@ angular.module('ui.jassa.rex')
         priority: 7,
         restrict: 'A',
         scope: true,
-        require: ['^rexContext', '^rexObject'],
+        require: ['^rexContext', '^rexObject', '?ngModel'],
         controller: angular.noop,
         compile: function(scope, ele, attrs, ctrls) {
             return createCompileComponent('rexDatatype', 'datatype', $parse);
@@ -1878,7 +1977,7 @@ angular.module('ui.jassa.rex')
         priority: 7,
         restrict: 'A',
         scope: true,
-        require: ['^rexContext', '^rexObject'],
+        require: ['^rexContext', '^rexObject', '?ngModel'],
         controller: angular.noop,
         compile: function(scope, ele, attrs, ctrls) {
             return createCompileComponent('rexLang', 'lang', $parse);
@@ -1990,6 +2089,18 @@ angular.module('ui.jassa.rex')
             return {
                 pre: function(scope, ele, attrs, ctrls) {
 
+                    var contextCtrl = ctrls[0];
+
+                    var slot = contextCtrl.allocSlot();
+                    slot.triples = [];
+                    //slot.entry = {};
+
+                    scope.$on('$destroy', function() {
+                        slot.release();
+                    });
+
+
+
                     syncAttr($parse, scope, attrs, 'rexNavPredicate');
                     syncAttr($parse, scope, attrs, 'rexNavInverse');
 
@@ -2049,7 +2160,7 @@ angular.module('ui.jassa.rex')
                         var p = jassa.rdf.NodeFactory.createUri(pm.expandPrefix(scope.rexNavPredicate));
 
                         var triples = array.map(function(item) {
-                            var o = jassa.rdf.NodeFactory.createUri(item);
+                            var o = jassa.rdf.NodeFactory.createUri(pm.expandPrefix(item));
                             var r = scope.rexNavInverse
                                 ? new jassa.rdf.Triple(o, p, s)
                                 : new jassa.rdf.Triple(s, p, o)
@@ -2059,7 +2170,10 @@ angular.module('ui.jassa.rex')
                         });
 
                         // TODO: We must check whether that triple already exists, and if it does not, insert it
-                        jassa.io.TalisRdfJsonUtils.triplesToTalisRdfJson(triples, scope.rexContext.override);
+                        //jassa.io.TalisRdfJsonUtils.triplesToTalisRdfJson(triples, scope.rexContext.override);
+
+                        // Notify the context about the triples which we require to exist
+                        slot.triples = triples;
                     };
 
                     // TODO Check for changes in the target array, and update
@@ -2339,17 +2453,23 @@ angular.module('ui.jassa.rex')
                     var doPrefetch = function() {
                         //console.log('doPrefetch');
 
-                        var lookupFn = scope.rexLookup;
+                        var sparqlService = scope.rexSparqlService;
+                        var lookupEnabled = scope.rexLookup;
                         var subjectUri = scope.rexSubject;
 
-                        if(lookupFn && angular.isFunction(lookupFn) && subjectUri) {
+                        //if(lookupFn && angular.isFunction(lookupFn) && subjectUri) {
+                        if(lookupEnabled && sparqlService && subjectUri) {
 
                             var pm = scope.rexPrefixMapping;
                             var uri = pm ? pm.expandPrefix(subjectUri) : subjectUri;
 
                             var s = jassa.rdf.NodeFactory.createUri(uri);
 
-                            var promise = scope.rexLookup(s);
+
+                            var promise = jassa.service.ServiceUtils.execDescribeViaSelect(sparqlService, [s]);
+
+
+                            //var promise = scope.rexLookup(s);
                             $q.when(promise).then(function(graph) {
                                 var contextScope = contextCtrl.$scope.rexContext;
                                 var baseGraph = contextScope.baseGraph = contextScope.baseGraph || new jassa.rdf.GraphImpl();
@@ -2398,6 +2518,10 @@ angular.module('ui.jassa.rex')
 angular.module('ui.jassa.rex')
 
 /**
+ * TODO: Actually we should just implement this as a convenience directive which replaces itself with
+ * rex-termtype rex-value rex-lang and rex-datatype
+ * This way we wouldn't have to make the book keeping more complex than it already is
+ *
  * rexTerm synchronizes a model which is interpreted as an object in a talis RDF json and
  * thus provides the fields 'type', 'value', 'datatype' and 'lang'.
  *
@@ -2432,7 +2556,7 @@ angular.module('ui.jassa.rex')
         priority: 10,
         restrict: 'A',
         scope: true,
-        require: ['^rexContext', '^rexObject'],
+        require: ['^rexContext', '^rexObject', '?ngModel'],
         controller: angular.noop,
         compile: function(ele, attrs) {
             return createCompileComponent('rexTermtype', 'type', $parse);
@@ -2489,7 +2613,7 @@ angular.module('ui.jassa.rex')
         priority: 4,
         restrict: 'A',
         scope: true,
-        require: ['^rexContext', '^rexObject'],
+        require: ['^rexContext', '^rexObject', '?ngModel'],
         controller: angular.noop,
         compile: function(ele, attrs) {
             return createCompileComponent('rexValue', 'value', $parse);
