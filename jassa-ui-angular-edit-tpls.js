@@ -461,6 +461,9 @@ angular.module('ui.jassa.geometry-input', [])
     };
   }]);
 
+
+var rdfTermInputCounter = 0;
+
 angular.module('ui.jassa.rdf-term-input', [])
 
 .directive('rdfTermInput', ['$parse', function($parse) {
@@ -476,7 +479,8 @@ angular.module('ui.jassa.rdf-term-input', [])
         restrict: 'EA',
         priority: 0,
         //transclude: true,
-        require: '^ngModel',
+        //require: ['?^ngForm', 'ngModel'],
+        require: 'ngModel',
         templateUrl: 'template/rdf-term-input/rdf-term-input.html',
         replace: true,
         //scope: true,
@@ -490,6 +494,9 @@ angular.module('ui.jassa.rdf-term-input', [])
             rightButton: '=?'
         },
         controller: ['$scope', function($scope) {
+
+            // The sub widgets will register themselves here
+            $scope.forms = {};
 
             $scope.state = $scope.$state || {};
             $scope.ngModelOptions = $scope.ngModelOptions || {};
@@ -559,7 +566,80 @@ angular.module('ui.jassa.rdf-term-input', [])
         }],
         compile: function(ele, attrs) {
             return {
+                //pre: function(scope, ele, attrs, ctrls) {//ngModel) {
+//                var ngForm = ctrls[0];
+//                var ngModel = ctrls[1];
+//
+//                if(ngForm) {
+//                    console.log(ngForm.$name);
+//                }
+
                 pre: function(scope, ele, attrs, ngModel) {
+
+                    ngModel.$name = scope.$eval(attrs.name);
+
+                    // This pristine watching seems like an aweful hack to me :/
+                    // But oh well
+
+                    var getSubForms = function() {
+                        var r = [
+                            scope.forms.type.value,
+                            scope.forms.datatype.value,
+                            scope.forms.lang.value,
+                            scope.forms.value.value
+                        ];
+
+                        return r;
+                    };
+
+                    var checkPristine = function() {
+                        var cs = getSubForms();
+
+                        var r = !cs.some(function(c) {
+                            return !c.$pristine;
+                        });
+
+                        return r;
+                    };
+
+                    scope.$watch(function() {
+                        return ngModel.$pristine;
+                    }, function(isPristine) {
+                        if(isPristine) {
+                            var cs = getSubForms();
+                            cs.forEach(function(c) {
+                                c.$setPristine();
+                            });
+                        }
+                    });
+
+                    scope.$watch(checkPristine, function(isPristine) {
+                        if(isPristine) {
+                            ngModel.$setPristine();
+                        } else {
+                            ngModel.$setDirty();
+                        }
+                    });
+
+//                    scope.$watch('forms.type.value.$pristine', function() {
+//                        console.log('YAAAY type' + scope.forms.type.value.$pristine);
+//                    });
+//
+//                    scope.$watch('forms.value.value.$pristine', function() {
+//                        console.log('Wooo value' + scope.forms.value.value.$pristine);
+//                    });
+
+                    //ngModel.$name = scope.$eval(attrs.name);
+
+                    /*
+                    console.log(scope.state);
+                    scope.$watch(function() {
+                        return ngModel.$pristine;
+                    }, function(pristine) {
+
+                    });
+                    */
+
 
                     scope.rightButton = false;
 
@@ -750,12 +830,20 @@ angular.module('ui.jassa.rdf-term-input', [])
                             if(newValue) {
                                 //modelSetter(scope, newValue);
                                 //scope.bindModel = newValue;
+
                                 angular.copy(newValue, scope.bindModel);
+                                //ngModel.$setViewValue(newValue);
 
                                 //if(!scope.$phase) { scope.$apply(); }
                                 //console.log('EXPOSED', scope.bindModel);
                             }
                         }, true);
+
+
+//                        scope.$watch('state', function(state) {
+//                            ngModel.$setViewValue(state);
+//                        });
+
                     //}
                 }
 
@@ -2847,9 +2935,14 @@ angular.module("template/geometry-input/geometry-input.html", []).run(["$templat
 angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/rdf-term-input/rdf-term-input.html",
     "<div class=\"input-group\">\n" +
+    "\n" +
+    "  <!-- Note: On some occasions its useful to remove the parent element of this directive for layouting with bootstrap\n" +
+    "       For this reason we can't use ng-form on the parent, and instead have to duplicate it for each input-group-addon :/\n" +
+    "   -->\n" +
+    "\n" +
     "  <!-- Term type selector -->\n" +
-    "  <div class=\"input-group-addon\" style=\"padding: 0px 0px !important;\">\n" +
-    "    <ui-select ng-model=\"state.type\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
+    "  <div ng-form=\"forms.type\" class=\"input-group-addon\" style=\"padding: 0px 0px !important;\">\n" +
+    "    <ui-select name=\"value\" ng-model=\"state.type\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\"  reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
     "      <ui-select-match placeholder=\"Termtype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "      <ui-select-choices style=\"z-index: 999;\" repeat=\"item.id as item in termTypes | filter: $select.search\">\n" +
     "        <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
@@ -2857,8 +2950,8 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "    </ui-select>\n" +
     "  </div>\n" +
     "  <!-- Datatype selector -->\n" +
-    "  <div ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
-    "    <ui-select ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\" tagging=\"addDatatype\" reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
+    "  <div ng-form=\"forms.datatype\" ng-show=\"state.type===vocab.typedLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
+    "    <ui-select name=\"value\" ng-model=\"state.datatype\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\" tagging=\"addDatatype\" reset-search-input=\"false\" style=\"width: 100px;line-height:0;\" >\n" +
     "      <ui-select-match placeholder=\"Datatype\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "      <!--ui-select-choices repeat=\"item in datatypes | filter: $select.search\" refresh=\"refreshDatatype($select.search)\" refresh-delay=\"100\"-->\n" +
     "      <ui-select-choices style=\"z-index: 999;\" repeat=\"item.id as item in datatypes | filter: $select.search\">\n" +
@@ -2867,8 +2960,8 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "    </ui-select>\n" +
     "  </div>\n" +
     "  <!-- Language selector -->\n" +
-    "  <div ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
-    "    <ui-select ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\" tagging=\"addLanguage\" reset-search-input=\"false\" style=\"width: 100px; line-height:0;\" >\n" +
+    "  <div ng-form=\"forms.lang\" ng-show=\"state.type===vocab.plainLiteral\" class=\"input-group-addon\" style=\"border-left: 0px; padding: 0px 0px !important;\">\n" +
+    "    <ui-select name=\"value\" ng-model=\"state.lang\" ng-model-options=\"ngModelOptions\" ng-disabled=\"disabled\" theme=\"selectize\" tagging=\"addLanguage\" reset-search-input=\"false\" style=\"width: 100px; line-height:0;\" >\n" +
     "      <ui-select-match placeholder=\"Language\">{{$select.selected.displayLabel}}</ui-select-match>\n" +
     "      <ui-select-choices style=\"z-index: 999;\" repeat=\"item.id as item in langs | filter: $select.search\">\n" +
     "        <span ng-bind-html=\"item.displayLabel | highlight: $select.search\"></span>\n" +
@@ -2876,6 +2969,8 @@ angular.module("template/rdf-term-input/rdf-term-input.html", []).run(["$templat
     "    </ui-select>\n" +
     "  </div>\n" +
     "  <!-- Input -->\n" +
-    "  <input type=\"text\" class=\"form-control margin-left-1\" style=\"height: 35px !important;\" ng-model=\"state.value\" ng-model-options=\"ngModelOptions\">\n" +
+    "  <div ng-form=\"forms.value\" class=\"form-control margin-left-1\" style=\"height: 35px !important; padding: 0px; border: 0px; margin: 0px\">\n" +
+    "    <input name=\"value\" type=\"text\" style=\"width: 100%; height: 100%;\" ng-model=\"state.value\" ng-model-options=\"ngModelOptions\">\n" +
+    "  </div>\n" +
     "</div>");
 }]);
