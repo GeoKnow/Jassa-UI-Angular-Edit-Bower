@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-03-03
+ * Version: 0.9.0-SNAPSHOT - 2015-03-04
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.edit.tpls", "ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -2469,12 +2469,19 @@ angular.module('ui.jassa.rex')
 
                             var promise = jassa.service.ServiceUtils.execDescribeViaSelect(sparqlService, [s]);
 
+                            // Notify the context that the subject is being loaded
+                            //rexContext.loading.add(s);
 
                             //var promise = scope.rexLookup(s);
                             $q.when(promise).then(function(graph) {
                                 var contextScope = contextCtrl.$scope.rexContext;
                                 var baseGraph = contextScope.baseGraph = contextScope.baseGraph || new jassa.rdf.GraphImpl();
 
+                                // Remove prior data from the graph
+                                var pattern = new jassa.rdf.Triple(s, null, null);
+                                contextScope.baseGraph.removeMatch(pattern);
+
+                                // Add the updated data
                                 contextScope.baseGraph.addAll(graph);
                                 // TODO Add the data to the context
                             });
@@ -2485,8 +2492,10 @@ angular.module('ui.jassa.rex')
 //                        });
                     };
 
-                    scope.$watchGroup([
+                    scope.$watch([
                         function() {
+                            return scope.rexSparqlService;
+                        }, function() {
                             return scope.rexLookup;
                         }, function() {
                             return scope.rexSubject;
