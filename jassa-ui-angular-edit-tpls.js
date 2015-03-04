@@ -2492,17 +2492,7 @@ angular.module('ui.jassa.rex')
 //                        });
                     };
 
-                    scope.$watch([
-                        function() {
-                            return scope.rexSparqlService;
-                        }, function() {
-                            return scope.rexLookup;
-                        }, function() {
-                            return scope.rexSubject;
-                        }, function() {
-                            return scope.rexPrefixMapping;
-                        }
-                    ], function() {
+                    scope.$watchCollection('[rexSparqlService, rexLookup, rexSubject, rexPrefixMapping]', function() {
                         doPrefetch();
                     });
 
