@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-03-04
+ * Version: 0.9.0-SNAPSHOT - 2015-03-05
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -1123,7 +1123,9 @@ var createCompileComponent = function($rexComponent$, $component$, $parse, oneWa
 
             // TODO: Probably outdated: Forwards: If the model changes, we need to update the change object in the scope
 
-            // If the model value changes, we need to update the override to reflect this
+            // Old rule: If the model value changes, we need to update the override to reflect this
+
+            // New rule: Only if a dirty model changes, we need to update the override
             scope.$watch(function() {
                 var r = modelGetter(scope);
 
@@ -1138,8 +1140,10 @@ var createCompileComponent = function($rexComponent$, $component$, $parse, oneWa
                 slot.entry.val = newVal;
 
                 if(newVal != null) {
+                    if(!ngModel || !ngModel.$pristine) {
                     //contextCtrl.getOverride().putEntries([entry]);
-                    setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
+                        setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
+                    }
                 }
 //                else {
 //                    // Remove null values
