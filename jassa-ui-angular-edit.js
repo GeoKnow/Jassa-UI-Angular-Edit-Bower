@@ -2,13 +2,260 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-03-05
+ * Version: 0.9.0-SNAPSHOT - 2015-03-08
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
 angular.module('ui.jassa.geometry-input', [])
 
-  .directive('geometryInput', ['$http', '$q', function($http, $q) {
+  .provider('GeocodingLookup', function() {
+
+    this.config = {
+      service: ['Nominatim', 'LinkedGeoData'],
+      defaultService: false
+    };
+
+    // a collection of pre-set service configs
+    this.defaultServices = {
+      Nominatim: {
+        label: 'Nominatim',
+        serviceType: 'rest',
+        url: 'http://nominatim.openstreetmap.org/search/?format=json&polygon_text=1&q=',
+        data: {
+          format: 'json',
+          polygon_text: '1',
+          q: '%KEYWORD%'
+        },
+        fnSuccess: function(response) {
+          var data = response.data;
+          var resultSet = [];
+          for (var i in data) {
+            if (data[i].hasOwnProperty('geotext')) {
+              resultSet.push({
+                firstInGroup: false,
+                wkt: data[i].geotext,
+                label: data[i].display_name,
+                group: 'Nominatim'
+              });
+            }
+          }
+          return resultSet;
+        }
+      },
+      LinkedGeoData: {
+        label: 'LinkedGeoData',
+        serviceType: 'sparql',
+        endpoint: 'http://linkedgeodata.org/vsparql',
+        graph: 'http://linkedgeodata.org/ne/',
+        prefix: {
+          ogc: 'http://www.opengis.net/ont/geosparql#',
+          geom: 'http://geovocab.org/geometry#'
+        },
+        query: '{'
+          +' Graph <http://linkedgeodata.org/ne/> {'
+          +' ?s a <http://linkedgeodata.org/ne/ontology/Country> ;'
+          +' rdfs:label ?l ;'
+          +' geom:geometry ['
+          +'  ogc:asWKT ?g'
+          +' ] '
+          +' FILTER regex(?l, "%KEYWORD%", "i") '
+          +' } '
+          +'}',
+        sponateTemplate: [{
+          id: '?s',
+          label: '?l',
+          wkt: '?g'
+        }],
+        limit: 5,
+        fnSuccess: function(response) {
+          var data = response;
+          var resultSet = [];
+          if (data.length > 0) {
+            for(var i in data) {
+              resultSet.push({
+                'firstInGroup': false,
+                'wkt': data[i].val.wkt,
+                'label': data[i].val.label,
+                'group': 'LinkedGeoData'
+              });
+            }
+          }
+          return resultSet;
+        }
+      }
+    };
+
+    // stores service configs which are set by the
+    // GeocodingLookupProvider.setService function call
+    this.userServices = {};
+
+    this.$get = function() {
+      // inject $http and $q
+      var initInjector = angular.injector(['ng']);
+      var $http = initInjector.get('$http');
+      var $q = initInjector.get('$q');
+
+      var promiseCache = {
+        /** Meta Information
+         * [{
+         *   label: x,
+         *   promiseID: y
+         * }]
+         */
+        promisesMetaInformation: [],
+        promises: []
+      };
+
+      // use default config of geocoding services when no services are set by user
+      var useServiceConfig = {};
+
+      for (var i in this.config.service) {
+        var serviceLabel = this.config.service[i];
+        useServiceConfig[serviceLabel] = this.defaultServices[serviceLabel];
+      }
+
+      if(!_(this.userServices).isEmpty()) {
+        if (this.config.defaultService) {
+          _(useServiceConfig).extend(this.userServices);
+        } else {
+          useServiceConfig = this.userServices;
+        }
+      }
+
+      var setPromise = function(serviceLabel, promise) {
+        // needed for identify a promise to a service
+        // the first promise matches the first promiseMetaInformation
+        var promiseID = promiseCache.promises.length;
+        promiseCache.promisesMetaInformation.push({
+          label: serviceLabel,
+          promiseID: promiseID
+        });
+        promiseCache.promises.push(promise);
+      };
+
+      // returns the promiseCache
+      var getPromises = function() {
+        return promiseCache;
+      };
+
+      var clearPromiseCache = function() {
+        promiseCache.promises = [];
+        promiseCache.promisesMetaInformation = [];
+      };
+
+      var createSparqlService = function(url, graphUris) {
+        var result = jassa.service.SparqlServiceBuilder.http(url, graphUris, {type: 'POST'})
+          .cache().virtFix().paginate(1000).pageExpand(100).create();
+        return result;
+      };
+
+      var requestGeocodingService = function(service, keyword) {
+        if (service.serviceType === 'rest') {
+          return restServiceRequest(service, keyword);
+        }
+        if (service.serviceType === 'sparql') {
+          return sparqlServiceRequest(service, keyword);
+        }
+      };
+
+      var restServiceRequest = function(service, keyword) {
+        var queryString = queryData(service.data).replace(/%KEYWORD%/gi,keyword);
+        return $http({
+          'method': 'GET',
+          'url': service.url+'?'+queryString,
+          'cache': true,
+          'headers' : {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        });
+      };
+
+      var sparqlServiceRequest = function(service, keyword) {
+
+        var sparqlService = createSparqlService(service.endpoint, service.graph);
+
+        var store = new jassa.sponate.StoreFacade(sparqlService, _(service.prefix)
+          .defaults(jassa.vocab.InitialContext));
+
+        var query = service.query.replace(/%KEYWORD%/gi,keyword);
+
+        var limit = service.limit || 10;
+
+        store.addMap({
+          name: 'sparqlService',
+          template: service.sponateTemplate,
+          from: query
+        });
+
+        return store.sparqlService.getListService().fetchItems(null, limit);
+      };
+
+      var queryData = function(data) {
+        var ret = [];
+        for (var d in data) {
+          ret.push(d + '=' + data[d]);
+        }
+        return ret.join('&');
+      };
+
+      var firstInGroupTrue = function(results) {
+        results = _(results).flatten();
+        // mark the first of each group for headlines
+        results = _(results).groupBy('group');
+        results = _(results).map(function(g) {
+          g[0].firstInGroup = true;
+          return g;
+        });
+        results = _(results).flatten();
+        results = _(results).value();
+        return results;
+      };
+
+      return {
+        findByKeyword: function(keyword) {
+          // clear promise cache for new requests
+          clearPromiseCache();
+
+          // start requesting the services and collect the promises
+          for(var serviceLabel in useServiceConfig) {
+            var service = useServiceConfig[serviceLabel];
+            var promise = requestGeocodingService(service, keyword);
+            setPromise(serviceLabel, promise);
+          }
+
+          // wait until all requests are done and return final resultSet
+          var promiseCache = getPromises();
+          var resultPromise = $q.all(promiseCache.promises).then(function(response) {
+            var results = [];
+            // iterate through all responses and insert the result into results
+            for (var i in response) {
+              var data = response[i];
+              var serviceLabel = promiseCache.promisesMetaInformation[i].label;
+              // insert the result of a response into the final results-array
+              var result = useServiceConfig[serviceLabel].fnSuccess(data);
+              results.push(result);
+            }
+
+            return firstInGroupTrue(results);
+          });
+
+          return resultPromise;
+        }
+      };
+    };
+
+    this.setService = function(serviceConfig) {
+      this.userServices[serviceConfig.label] = serviceConfig;
+    };
+
+    this.setConfiguration = function(userConfig) {
+      _(this.config).extend(userConfig);
+    };
+
+  })
+
+  .directive('geometryInput', ['$http', '$q', 'GeocodingLookup', function($http, $q, GeocodingLookup) {
 
     var uniqueId = 1;
 
@@ -24,228 +271,13 @@ angular.module('ui.jassa.geometry-input', [])
         geocodingServices: '=geocodingServices'
       },
       controller: ['$scope', function($scope) {
+
         $scope.ngModelOptions = $scope.ngModelOptions || {};
         $scope.geometry = 'point';
         $scope.isLoading = false;
 
-        $scope.getGeocodingInformation = function(searchString, successCallback) {
-
-          var url = 'http://nominatim.openstreetmap.org/search/?q='+searchString+'&format=json&polygon_text=1';
-
-          var responsePromise = $http({
-            'method': 'GET',
-            'url': url,
-            'cache': true,
-            'headers' : {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            }
-          });
-
-          responsePromise.success(function(data, status, headers, config) {
-            if(angular.isFunction(successCallback)) {
-              successCallback(data, responsePromise);
-            }
-
-          });
-          responsePromise.error(function(data, status, headers, config) {
-            alert('AJAX failed!');
-          });
-        };
-
-        var createSparqlService = function(url, graphUris) {
-          var result = jassa.service.SparqlServiceBuilder.http(url, graphUris, {type: 'POST'})
-            .cache().virtFix().paginate(1000).pageExpand(100).create();
-
-          return result;
-        };
-
-        $scope.fetchResultsForRestService = function(restServiceConfig, searchString) {
-          return $http({
-            'method': 'GET',
-            'url': restServiceConfig.endpoint+searchString,
-            'cache': true,
-            'headers' : {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            }
-          });
-        };
-
-        $scope.fetchResultsForSparqlService = function(sparqlServiceConfig, searchString) {
-
-          var sparqlService = createSparqlService(sparqlServiceConfig.endpoint, sparqlServiceConfig.graph);
-
-          var store = new jassa.sponate.StoreFacade(sparqlService, _(sparqlServiceConfig.prefix)
-            .defaults(jassa.vocab.InitialContext));
-
-          var query = sparqlServiceConfig.query.replace(/%SEARCHSTRING%/gi,searchString);
-
-          store.addMap({
-            name: 'sparqlService',
-            template: [{
-              id: '?s',
-              label: '?l', // kann man dann noch besser machen - aber fürs erste passts
-              wkt: '?g',
-              group: '' + sparqlServiceConfig.name
-            }],
-            from: query
-          });
-
-          return store.sparqlService.getListService().fetchItems(null, 10);
-        };
-
         $scope.fetchResults = function(searchString) {
-          // Geocoding APIs
-          var sources = {
-            restService: [
-              {
-                name: 'Nominatim',
-                endpoint: 'http://nominatim.openstreetmap.org/search/?format=json&polygon_text=1&q='
-              },
-              {
-                name: 'Nokia HERE',
-                endpoint: 'http://geocoder.cit.api.here.com/6.2/geocode.json?app_id=DemoAppId01082013GAL&app_code=AJKnXv84fjrb0KIHawS0Tg&additionaldata=IncludeShapeLevel,default&mode=retrieveAddresses&searchtext='
-              }
-            ],
-            sparqlService: [
-              {
-                'name' : 'LinkedGeoData (Natural Earth)',
-                'endpoint' : 'http://linkedgeodata.org/vsparql',
-                'graph' : 'http://linkedgeodata.org/ne/',
-                'type' : 'http://linkedgeodata.org/ne/ontology/Country',
-                'active' : false,
-                'facets' : false,
-                'prefix' : {
-                  ogc: 'http://www.opengis.net/ont/geosparql#',
-                  geom: 'http://geovocab.org/geometry#'
-                },
-                'query' : '{'
-                  +' Graph <http://linkedgeodata.org/ne/> {'
-                  +' ?s a <http://linkedgeodata.org/ne/ontology/Country> ;'
-                  +' rdfs:label ?l ;'
-                  +' geom:geometry ['
-                  +'  ogc:asWKT ?g'
-                  +' ] '
-                  +' FILTER regex(?l, "'+ searchString +'", "i") '
-                  +' } '
-                  +'}'
-              }
-            ]
-          };
-
-          // stores promises for each geocoding api
-          var promiseCache = {
-            promisesMetaInformation: {
-              /**
-               * [{
-               *   name: x,
-               *   promiseID: y
-               * }]
-               */
-              restService: [],
-              sparqlService: []
-            },
-            promises: []
-          };
-          for (var serviceType in $scope.geocodingServices) {
-            if (serviceType === 'restService') {
-              for(var r in sources.restService) {
-                var restService = sources.restService[r];
-                promiseCache.promisesMetaInformation.restService.push({
-                  name: restService.name,
-                  id: promiseCache.promises.length
-                });
-                promiseCache.promises.push($scope.fetchResultsForRestService(restService, searchString));
-              }
-            }
-
-            if (serviceType === 'sparqlService') {
-              for(var s in sources.sparqlService) {
-                var sparqlService = sources.sparqlService[s];
-                promiseCache.promisesMetaInformation.sparqlService.push({
-                  name: sparqlService.name,
-                  id: promiseCache.promises.length
-                });
-                promiseCache.promises.push($scope.fetchResultsForSparqlService(sparqlService, searchString));
-              }
-            }
-
-          }
-
-          // after getting the response then process the response promise
-          var resultPromise = $q.all(promiseCache.promises).then(function(responses){
-
-            console.log('promiseCache', promiseCache);
-
-            var results = [];
-
-            for (var i in responses) {
-              // used to grab the hostname a.href = url -> a.hostname
-              var a = document.createElement('a');
-
-              for (var j in responses[i].data) {
-                // Nominatim
-                if(i==='0') {
-                  a.href = responses[i].config.url;
-                  if (responses[i].data[j].hasOwnProperty('geotext')) {
-                    results.push({
-                      'firstInGroup': false,
-                      'wkt': responses[i].data[j].geotext,
-                      'label': responses[i].data[j].display_name,
-                      'group': $scope.geocodingServices.restService[i].name || a.hostname
-                    });
-                  }
-                }
-
-                // Nokia HERE Maps Sample
-                if(i==='1') {
-                  a.href = responses[i].config.url;
-                  if (responses[i].data[j].View.length > 0) {
-                    for(var k in responses[i].data[j].View[0].Result) {
-                      if(responses[i].data[j].View[0].Result[k].Location.hasOwnProperty('Shape')) {
-                        results.push({
-                          'firstInGroup': false,
-                          'wkt': responses[i].data[j].View[0].Result[k].Location.Shape.Value,
-                          'label': responses[i].data[j].View[0].Result[k].Location.Address.Label,
-                          'group': $scope.geocodingServices.restService[i].name || a.hostname
-                        });
-                      }
-                    }
-                  }
-                }
-              }
-
-              // LinkedGeoData
-              if(i==='2') {
-                if (responses[i].length > 0) {
-                  for(var l in responses[i]) {
-                    results.push({
-                      'firstInGroup': false,
-                      'wkt': responses[i][l].val.wkt,
-                      'label': responses[i][l].val.label,
-                      'group': responses[i][l].val.group
-                    });
-                  }
-                }
-              }
-            }
-
-            // mark the first of each group for headlines
-            results = _(results).groupBy('group');
-            results = _(results).map(function(g) {
-              g[0].firstInGroup = true;
-              return g;
-            });
-            results = _(results).flatten();
-            results = _(results).value();
-
-            //console.log('results', results);
-
-            return results;
-          });
-
-          return resultPromise;
+          return GeocodingLookup.findByKeyword(searchString);
         };
 
         $scope.onSelectGeocode = function(item) {
@@ -281,25 +313,6 @@ angular.module('ui.jassa.geometry-input', [])
               //scope.geometry-input-input = newValue;
               toggleControl();
             });
-
-            /** Disabled
-            scope.$watch(function () {
-              return scope.searchString;
-            }, function (newValue) {
-              console.log('searchString', newValue);
-              if (newValue.length > 3) {
-                scope.getGeocodingInformation(newValue, function(data) {
-                  console.log('getGeocodingInformation', data);
-                  for (var i in data) {
-                    if(data[i].geotext != null) {
-                      parseWKT(data[i].geotext);
-                    }
-                  }
-                });
-              }
-              //scope.searchResults = scope.fetchGeocodingResults(newValue);
-            });
-            */
 
             function init() {
               // generate custom map id
@@ -890,6 +903,7 @@ angular.module('ui.jassa.rdf-term-input', [])
 
 
 
+
 /**
  * Falsy valued arguments will be replaced with empty strings or 0
  */
@@ -923,6 +937,8 @@ var Coordinate = Jassa.ext.Class.create({
         return result;
     },
 });
+
+
 
 // Prefix str:
 var parsePrefixStr = function(str) {
@@ -972,14 +988,13 @@ function capitalize(s)
  *
  */
 var createCompileComponent = function($rexComponent$, $component$, $parse, oneWay) {
-    //var $rexComponent$ = 'rex' + capitalize($component$);
-//if(true) { return; }
 
     var tag = '[' + $component$ + ']';
 
     return {
         pre: function(scope, ele, attrs, ctrls) {
 
+            //if($component$ != 'deleted') { return; }
 
             var modelExprStr = attrs[$rexComponent$];
             var modelGetter = $parse(modelExprStr);
@@ -991,36 +1006,93 @@ var createCompileComponent = function($rexComponent$, $component$, $parse, oneWa
 
             var contextCtrl = ctrls[0];
 
-            // ngModel Used for pristine/dirty checking
+            // ngModel is optionally referenced for dirty checking
             var ngModel = ctrls[2];
-            //var objectCtrl = ctrls[1];
 
             var slot = contextCtrl.allocSlot();
             slot.entry = {};
 
             scope.$on('$destroy', function() {
-//console.log('Destroying compile component ' + tag);
-
                 slot.release();
+                unsetDirty();
             });
 
-//console.log('Start: Creating compile component ' + tag);
 
-            // If the pristine state changes to true, reset the value
-            scope.$watch(function() {
-                var r = ngModel && ngModel.$pristine;
-                return r;
-            }, function(after, before) {
-                if(after && after != before) {
-                    if(modelSetter) {
-                        var coordinate = createCoordinate(scope, $component$);
-                        var value = getValueAt(scope.rexContext.json, coordinate);
-                        modelSetter(scope, value);
+            // Immediately set the initial coordinate and set the model value
+            // If we don't do it now we will lose any present model values should the coordinate change
+            {
+                slot.entry.key = createCoordinate(scope, $component$);
+                var value = modelGetter(scope);
+                if(value) {
+                    setValueAt(contextCtrl.getOverride(), slot.entry.key, value);
+                }
+            }
+
+
+            var setDirty = function() {
+                var coordinate = slot.entry.key;
+                //console.log('>> DIRTY   : ' + coordinate);
+
+                var dirty = scope.rexContext.dirty;
+                var dirtySlotIds = dirty[coordinate] = dirty[coordinate] || {};
+                dirtySlotIds[slot.id] = true;
+            };
+
+            var unsetDirty = function(coordinate) {
+                coordinate = coordinate || slot.entry.key;
+                //console.log('>> PRISTINE: ' + coordinate);
+
+                var dirty = scope.rexContext.dirty;
+                var dirtySlotIds = dirty[coordinate];
+                if(dirtySlotIds) {
+                    delete dirtySlotIds[slot.id];
+
+                    //console.log('>> PRISTINE SLOT: ' + coordinate + ' [' + slot.id + ']');
+
+                    if(Object.keys(dirtySlotIds).length === 0) {
+                        delete dirty[coordinate];
+
+                        //console.log('>> PRISTINE COORD: ' + coordinate);
                     }
                 }
-            });
+            };
 
-            // If the coordinate changes AND the model is not pristine,
+            /**
+             * This is a bit hacky:
+             *
+             * The deleted attribute is always transferred when the coordinate changes
+             *
+             */
+            var checkDirty = function(coordinate) {
+                var result;
+                if($component$ === 'deleted') {
+                    result = true;
+                } else {
+
+                    coordinate = coordinate || slot.entry.key;
+                    var dirty = scope.rexContext.dirty;
+                    var dirtySlotIds = dirty[coordinate];
+                    result = !!dirtySlotIds;
+                }
+                return result;
+            };
+
+
+
+            // If there is a model, take the pristine state into account
+            if(ngModel) {
+                var updateDirtyState = function() {
+                    if(ngModel.$pristine) {
+                        unsetDirty();
+                    } else {
+                        setDirty();
+                    }
+                };
+
+                scope.$watch(updateDirtyState);
+            }
+
+            // If the coordinate changes AND the target is not dirty,
             // we copy the value at the override's old coordinate to the new coordinate
             // This way we ensure we are not overwriting a user's input
             // Otherwise (if the model is pristine), just set the model to the value of the current base data
@@ -1028,132 +1100,62 @@ var createCompileComponent = function($rexComponent$, $component$, $parse, oneWa
                 var r = createCoordinate(scope, $component$);
                 return r;
             }, function(newCoordinate, oldCoordinate) {
-                // Tell the context the coordinate we are referring to
-                slot.entry.key = newCoordinate;
 
-                if(!ngModel || !ngModel.$pristine) {
+                // TODO This handler often gets called even if the coordinates actually equal - can we optimize it?
+                if(newCoordinate && !newCoordinate.equals(oldCoordinate)) {
+                    //console.log('>> Coordinate change from [' + oldCoordinate + '] to ' + ' [' + newCoordinate + ']');
 
-                    var oldValue = getEffectiveValue(scope.rexContext, oldCoordinate); //scope.rexContext.getValue(oldCoordinate);
-                    if(oldValue) {
-                        var entry = {
-                            key: newCoordinate,
-                            val: oldValue
-                        };
+                    // Check the dirty state at the old coordinate
+                    var isDirty = checkDirty(oldCoordinate);
 
-                        //contextCtrl.getOverride().putEntries([entry]);
-                        setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
-                    }
-                } else {
-                    // If the model is pristine, we do not update the override
-                    // instead we set the model to the source value for the given coordinate
-                    if(modelSetter) {
-                        // If the given model is writeable, then we need to update it
-                        // whenever the coordinate's value changes
+                    // Inform the context about the current coordinate we are referring to
+                    // TODO: If we did slot.setCoordinate(newCoordinate) then the context could immediately perform actions
+                    slot.entry.key = newCoordinate;
 
-                        var value = getValueAt(scope.rexContext.json, newCoordinate);
-//                        if(value == null) {
-//                            value = '';
-//                        }
-                        modelSetter(scope, value);
-                    }
+                    var value = isDirty
+                        ? getEffectiveValue(scope.rexContext, oldCoordinate)
+                        : getEffectiveValue(scope.rexContext, newCoordinate)
+                        ;
 
+                    //console.log('## Watch 1: Transferring value [' + value + '] from coordinate [' + oldCoordinate + '] to [' + newCoordinate + ']');
+                    setValueAt(contextCtrl.getOverride(), newCoordinate, value);
+
+                    //console.log('>> UNDIRTY : ' + oldCoordinate);
+                    unsetDirty(oldCoordinate);
                 }
             }, true);
 
 
-            // If the effective value at a coordinate changes, update the model
-            // Note: By default, if the effective value equals the source data, we reset the pristine flag
+            // If the effective value at a coordinate changes, set the model to that value
             if(!oneWay) {
                 scope.$watch(function() {
                     var coordinate = slot.entry.key;
-                    var r = getEffectiveValue(scope.rexContext, coordinate); //scope.rexContext.getValue(coordinate);
+                    var r = getEffectiveValue(scope.rexContext, coordinate);
                     return r;
 
                 }, function(value) {
                     var coordinate = slot.entry.key;
 
-                    var entry = {
-                        key: coordinate,
-                        val: value
-                    };
-
-                    //console.log('Value at coordinate ')
-
-                    if(value != null) {
-                        //contextCtrl.getOverride().putEntries([entry]);
-                        setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
-                    }
-
-                    slot.entry.value = value;
-
                     if(modelSetter) {
-                        // If the given model is writeable, then we need to update it
-                        // whenever the coordinate's value changes
-
-                        if(value != null) {
-                            modelSetter(scope, value);
-                        }
+                        //console.log('## Watch 2: Setting model value [' + value + '] from coordinate [' + coordinate + ']');
+                        modelSetter(scope, value);
                     }
-
-                    var isEmpty = function(str) {
-                        return str == null || str === '';
-                    };
-
-                    // Note: If the effective value equals the source value, we reset the pristine flag
-                    // This way, if the user manually restores changes to a value, the model is considered clean again
-                    //  Right now, we treat null and '' as equivalent.
-                    // ISSUE: Now, we have the undesired effect, that if fields of a resource map to parts of its URI,
-                    // then once data for the URI is retrieved, then the data that is input into the field then matches the data retrieved
-                    // caused the field to be considered pristine - hence, editing any of the fields the URI depends on will
-                    // cause all other fields to go blank again
-                    // I see the following options:
-                    // - We introduce a flag whether equal values count as pristine; e.g. rex-pristine-on-equals
-                    //   Note that this seems similar to the masterValue concept of https://github.com/betsol/angular-input-modified
-                    // - In the form there have to be buttons for resetting the pristine state explicitly
-                    // Anyway, for now we disable the following snipped
-//                    if(ngModel) {
-//                        var srcValue = getValueAt(scope.rexContext.json, coordinate);
-//                        if(srcValue === value || isEmpty(srcValue) && isEmpty(value)) {
-//                            ngModel.$setPristine();
-//                        }
-//                    }
 
                 }, true);
             }
 
-            // TODO: Probably outdated: Forwards: If the model changes, we need to update the change object in the scope
-
-            // Old rule: If the model value changes, we need to update the override to reflect this
-
-            // New rule: Only if a dirty model changes, we need to update the override
+            // If the model value changes, set the value in the override
+            // at that coordinate to reflect this
             scope.$watch(function() {
                 var r = modelGetter(scope);
-
                 return r;
-            }, function(newVal, oldVal) {
+            }, function(value) {
+                var coordinate = slot.entry.key;
 
-                var coordinate = slot.entry.key;//createCoordinate(scope, $component$);
-                var entry = {
-                    key: coordinate,
-                    val: newVal
-                };
-                slot.entry.val = newVal;
+                //console.log('## Watch 3: Setting shadow value [' + value + '] at coordinate [' + coordinate + ']');
+                setValueAt(contextCtrl.getOverride(), coordinate, value);
 
-                if(newVal != null) {
-                    if(!ngModel || !ngModel.$pristine) {
-                    //contextCtrl.getOverride().putEntries([entry]);
-                        setValueAt(contextCtrl.getOverride(), entry.key, entry.val);
-                    }
-                }
-//                else {
-//                    // Remove null values
-//                    // TODO Can this happen?
-//                    contextCtrl.getOverride().remove(coordinate);
-//                }
-
-                //console.log(tag + ' Model changed to ', newVal, ' from ', oldVal, ' at coordinate ', coordinate, '; updating override ', slot.entry);
             }, true);
-//console.log('Done: Creating compile component ' + tag);
 
         }
 
@@ -1187,6 +1189,8 @@ var assembleTalisRdfJson = function(map) {
             var o = x[coordinate.i] = x[coordinate.i] || {};
 
             o[coordinate.c] = str;
+        } else {
+            //console.log('<< DELETED: ' + coordinate);
         }
     });
 
@@ -1361,7 +1365,7 @@ var talisRdfJsonToEntries = function(talisRdfJson) {
 
 // Returns the object array at a given predicate
 var getObjectsAt = function(talisRdfJson, coordinate) {
-    var s = talisRdfJson[coordinate.s];
+    var s = coordinate ? talisRdfJson[coordinate.s] : null;
     var result = s ? s[coordinate.p] : null;
     return result;
 };
@@ -1381,6 +1385,7 @@ var getOrCreateObjectAt = function(talisRdfJson, coordinate, obj) {
     return result;
 };
 
+/* Dangerous: splicing breaks references by index
 var removeObjectAt = function(talisRdfJson, coordinate) {
     var s = talisRdfJson[coordinate.s];
     var p = s ? s[coordinate.p] : null;
@@ -1394,31 +1399,45 @@ var removeObjectAt = function(talisRdfJson, coordinate) {
         }
     }
 };
+*/
+
+var compactTrailingNulls = function(arr) {
+    while(arr.length && arr[arr.length-1] == null){
+        arr.pop();
+    }
+};
 
 var removeValueAt = function(talisRdfJson, coordinate) {
 
-    var s = talisRdfJson[coordinate.s];
-    var p = s ? s[coordinate.p] : null;
-    var i = p ? p[coordinate.i] : null;
-    //var c = i ? i[coordinate.c] : null;
+    var ps = talisRdfJson[coordinate.s];
+    var is = ps ? ps[coordinate.p] : null;
+    var cs = is ? is[coordinate.i] : null;
 
-    if(i) {
-        delete i[coordinate.c];
+    if(cs) {
+        delete cs[coordinate.c];
 
-        if(i.length === 0) {
-            delete p[coordinate.p];
+        if(Object.keys(cs).length === 0) {
 
-            if(Object.keys(p).length === 0) {
-                delete s[coordinate.s];
+            delete is[coordinate.i];
+            compactTrailingNulls(is);
+
+            if(is.length === 0) {
+                delete ps[coordinate.p];
+
+                if(Object.keys(ps).length === 0) {
+                    delete talisRdfJson[coordinate.s];
+                }
             }
         }
     }
 };
 
 var setValueAt = function(talisRdfJson, coordinate, value) {
-    if(value != null) {
+    //if(value != null) {
+    if(coordinate != null) {
         var o = getOrCreateObjectAt(talisRdfJson, coordinate);
         o[coordinate.c] = value;
+    //}
     }
 };
 
@@ -1541,12 +1560,13 @@ angular.module('ui.jassa.rex')
             //$scope.override = new jassa.util.HashMap();
 
             //this.rexContext = $scope.rexContext;
-            this.getOverride =    function() {
+            this.getOverride = function() {
                 //return $scope.override;
                 var rexContext = $scope.rexContext;
                 var r = rexContext ? rexContext.override : null;
                 return r;
             };
+
 
 
             // Attribute where child directives can register changes
@@ -1563,7 +1583,7 @@ angular.module('ui.jassa.rex')
 
             this.allocSlot = function() {
                 var tmp = this.nextSlot++;
-                var id = '' + tmp;
+                var id = 'slot_' + tmp;
 
                 //var self = this;
 
@@ -1651,6 +1671,26 @@ angular.module('ui.jassa.rex')
                     var initContext = function(rexContext) {
                         rexContext.override = rexContext.override || {};//  new jassa.util.HashMap();
 
+                        // a map from coordinate to slotId to true
+                        rexContext.dirty = {};
+
+                        /**
+                         * Resets the form by iterating over all referenced coordinates
+                         * and setting the override to the corresponding values from the base graph
+                         */
+                        rexContext.reset = function() {
+                            var coordinates = ctrl.getReferencedCoordinates();
+
+                            coordinates.forEach(function(coordinate) {
+                                var currentValue = getEffectiveValue(rexContext, coordinate);
+                                var originalValue = getValueAt(rexContext.json, coordinate);
+                                setValueAt(rexContext.override, coordinate, originalValue);
+                                console.log('Resetting ' + coordinate + ' from [' + currentValue + '] to [' + originalValue + ']');
+                            });
+                        };
+
+
+                        /*
                         rexContext.remove = rexContext.remove || function(coordinate) {
                             // Removes an object
                             var objs = getObjectsAt(rexContext.json, coordinate);
@@ -1663,6 +1703,7 @@ angular.module('ui.jassa.rex')
                                 objs.splice(coordinate.i, 1);
                             }
                         };
+                        */
 
                         /*
                         rexContext.setObject = function(s, p, i, sourceObj) {
@@ -1877,6 +1918,8 @@ angular.module('ui.jassa.rex')
                     };
 
 
+                    // NOT NEEDED: The override reflects the state of the form
+                    // it solely depends on the references; not the source data
                     var cleanupOverride = function()
                     {
                         var json = scope.rexContext.json;
@@ -1884,6 +1927,7 @@ angular.module('ui.jassa.rex')
                         //var override = scope.rexContext.override;
 
                         // Remove values from override that equal the source data
+                        /*
                         var entries = talisRdfJsonToEntries(override);
                         entries.forEach(function(entry) {
                             var coordinate = entry.key;
@@ -1894,6 +1938,8 @@ angular.module('ui.jassa.rex')
                                 removeValueAt(override, coordinate);
                             }
                         });
+                        */
+
 
                         /*
                         mapDifference(override, function(coordinate) {
@@ -1930,6 +1976,7 @@ angular.module('ui.jassa.rex')
                             }
                         });
 
+                        //console.log('Cleaned up override from ' + entries.length, entries);
                         //console.log('Override after cleanup', JSON.stringify(scope.rexContext.override.keys()));
                     };
 
@@ -2019,7 +2066,7 @@ angular.module('ui.jassa.rex')
         priority: 7,
         restrict: 'A',
         scope: true,
-        require: ['^rexContext', '^rexObject'],
+        require: ['^rexContext', '^rexObject', '?ngModel'],
         controller: angular.noop,
         compile: function(ele, attrs) {
             return createCompileComponent('rexDeleted', 'deleted', $parse);
@@ -2170,6 +2217,9 @@ angular.module('ui.jassa.rex')
 angular.module('ui.jassa.rex')
 
 /**
+ * TODO rex-results may be conceptually a much cleaner approach - deprecated/remove this directive if it proofs true
+ *
+ *
  * Directive to refer to the set of URIs at a target
  *
  * rexNavTargets="arrayOfTargetIriStrings"
@@ -2638,21 +2688,45 @@ angular.module('ui.jassa.rex')
  *
  *
  */
-.directive('rexTerm', ['$parse', function($parse) {
+.directive('rexTerm', ['$parse', '$compile', function($parse, $compile) {
     return {
-        priority: 11,
+        priority: 900,
         restrict: 'A',
         scope: true,
-        require: ['^rexContext', '^rexObject'],
+        terminal: true,
+        //require: ['^rexContext', '^rexObject', '?^ngModel'],
         controller: angular.noop,
         compile: function(ele, attrs) {
-            throw new Error('rex-term is not implemented yet');
-            //return createCompileComponent('rexValue', 'value', $parse);
+            return {
+                pre: function(scope, ele, attrs, ctrls) {
+                    var modelExprStr = attrs.rexTerm;
+
+                    if(jassa.util.ObjectUtils.isEmptyString(modelExprStr)) {
+                        var name = getModelAttribute(attrs);
+                        modelExprStr = attrs[name];
+                    }
+
+                    if(!modelExprStr) {
+                        throw new Error('No model provided and found');
+                    }
+
+                    ele.removeAttr('rex-term');
+
+                    ele.attr('rex-termtype', modelExprStr + '.type');
+                    ele.attr('rex-datatype', modelExprStr + '.datatype');
+                    ele.attr('rex-lang', modelExprStr + '.lang');
+                    ele.attr('rex-value', modelExprStr + '.value');
+
+                    // Continue processing any further directives
+                    $compile(ele)(scope);
+                }
+            };
         }
     };
 }])
 
 ;
+
 
 angular.module('ui.jassa.rex')
 
