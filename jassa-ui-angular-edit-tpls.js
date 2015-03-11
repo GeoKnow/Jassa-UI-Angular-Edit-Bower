@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-03-10
+ * Version: 0.9.0-SNAPSHOT - 2015-03-11
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.edit.tpls", "ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -263,7 +263,7 @@ angular.module('ui.jassa.geometry-input', [])
     return {
       restrict: 'EA',
       priority: 4,
-      require: ['^ngModel'],
+      require: '?ngModel',
       templateUrl: 'template/geometry-input/geometry-input.html',
       replace: true,
       scope: {
@@ -288,7 +288,9 @@ angular.module('ui.jassa.geometry-input', [])
       }],
       compile: function(ele, attrs) {
         return {
-          pre: function (scope, ele, attrs) {
+          pre: function (scope, ele, attrs, ngModel) {
+            ngModel.$name = scope.$eval(attrs.name);
+
             scope.searchString = '';
 
             var map, drawControls, polygonLayer, panel, wkt, vectors;
@@ -447,14 +449,19 @@ angular.module('ui.jassa.geometry-input', [])
             function onModificationStart(feature) {
               //console.log(feature.id + ' is ready to be modified');
               drawControls[scope.geometry].deactivate();
-
             }
 
             function onModification(feature) {
               //console.log(feature.id + ' has been modified');
               var wktValue = generateWKT(feature);
               scope.bindModel = wktValue;
-              scope.$apply();
+
+              // A modification makes this control dirty
+              ngModel.$setDirty();
+
+              if(scope.$$phase) {
+                  scope.$apply();
+              }
             }
 
             function onModificationEnd(feature) {
@@ -1245,13 +1252,22 @@ var processPrefixes = function(talisRdfJson, prefixMapping) {
 
 //var __defaultPrefixMapping = new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
 
-var createCoordinate = function(scope, component) {
-    var pm = scope.rexPrefixMapping || new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
-    //__defaultPrefixMapping;
 
+//var createCoordinate = function(scope, component) {
+//    var pm = scope.rexPrefixMapping || new jassa.rdf.PrefixMappingImpl(jassa.vocab.InitialContext);
+//
+//    return new Coordinate(
+//        pm.expandPrefix(scope.rexSubject),
+//        pm.expandPrefix(scope.rexPredicate),
+//        scope.rexObject,
+//        component
+//    );
+//};
+
+var createCoordinate = function(scope, component) {
     return new Coordinate(
-        pm.expandPrefix(scope.rexSubject),
-        pm.expandPrefix(scope.rexPredicate),
+        scope.rexSubject,
+        scope.rexPredicate,
         scope.rexObject,
         component
     );
@@ -1496,23 +1512,19 @@ var syncAttr = function($parse, $scope, attrs, attrName, deep, transformFn) {
     var attr = attrs[attrName];
     var getterFn = $parse(attr);
 
-    var updateScopeVal = function(val) {
-        var v = transformFn ? transformFn(val) : val;
-
-        $scope[attrName] = v;
+    var getEffectiveValue = function() {
+        var v = getterFn($scope);
+        var r = transformFn ? transformFn(v) : v;
+        return r;
     };
 
-    $scope.$watch(function() {
-        var r = getterFn($scope);
-        return r;
-    }, function(newVal, oldVal) {
-        //console.log('Syncing: ', attrName, ' to ', newVal, ' in ', $scope);
-        updateScopeVal(newVal);
+    $scope.$watch(getEffectiveValue, function(v) {
+        $scope[attrName] = v;
     }, deep);
 
-    var result = getterFn($scope);
+    var result = getEffectiveValue();
     // Also init the value immediately
-    updateScopeVal(result);
+    $scope[attrName] = result;
 
     return result;
 };
@@ -1545,7 +1557,7 @@ angular.module('ui.jassa.rex', ['dddi', 'ui.select']);
 angular.module('ui.jassa.rex')
 
 
-.directive('rexContext', ['$parse', function($parse) {
+.directive('rexContext', ['$parse', '$q', function($parse, $q) {
     return {
         priority: 30,
         restrict: 'A',
@@ -1660,6 +1672,8 @@ angular.module('ui.jassa.rex')
             return {
                 pre: function(scope, ele, attrs, ctrl) {
 
+                    //dddi = $dddi(scope);
+
                     // If no context object is provided, we create a new one
 //                    if(!attrs.rexContext) {
 //                        scope.rexContextAnonymous = {};
@@ -1675,19 +1689,33 @@ angular.module('ui.jassa.rex')
                         // a map from coordinate to slotId to true
                         rexContext.dirty = {};
 
+
+                        rexContext.refSubjects = {}; // a map from subject to reference count. Filled out by rexSubject.
+
+
+
                         /**
                          * Resets the form by iterating over all referenced coordinates
                          * and setting the override to the corresponding values from the base graph
                          */
                         rexContext.reset = function() {
-                            var coordinates = ctrl.getReferencedCoordinates();
 
-                            coordinates.forEach(function(coordinate) {
-                                var currentValue = getEffectiveValue(rexContext, coordinate);
-                                var originalValue = getValueAt(rexContext.json, coordinate);
-                                setValueAt(rexContext.override, coordinate, originalValue);
-                                console.log('Resetting ' + coordinate + ' from [' + currentValue + '] to [' + originalValue + ']');
+                            var r = updateSubjectGraphs().then(function() {
+
+                                // TODO Reload all data for referenced resources
+                                // This essentially means that rexSubject has to registered referenced resources here...
+
+                                var coordinates = ctrl.getReferencedCoordinates();
+
+                                coordinates.forEach(function(coordinate) {
+                                    var currentValue = getEffectiveValue(rexContext, coordinate);
+                                    var originalValue = getValueAt(rexContext.json, coordinate);
+                                    setValueAt(rexContext.override, coordinate, originalValue);
+                                    //console.log('Resetting ' + coordinate + ' from [' + currentValue + '] to [' + originalValue + ']');
+                                });
                             });
+
+                            return r;
                         };
 
 
@@ -1741,6 +1769,77 @@ angular.module('ui.jassa.rex')
 */
 
                     };
+
+                    var updateArray = function(arrFn) {
+                        var result = [];
+
+                        return function() {
+                            var items = arrFn();
+
+                            while(result.length) { result.pop(); }
+
+                            result.push.apply(result, items);
+
+                            return result;
+                        };
+                    };
+
+                   var getSubjects = updateArray(function() {
+                       var r = Object.keys(scope.rexContext.refSubjects);
+                       //console.log('Subjects:' + JSON.stringify(r));
+                       return r;
+                   });
+
+                   var updateSubjectGraphs = function() {
+                       var lookupEnabled = scope.rexLookup;
+                       var sparqlService = scope.rexSparqlService;
+                       var subjectStrs = scope.rexContext.subjects;
+
+                       var r;
+
+                       if(lookupEnabled && sparqlService && subjectStrs) {
+                           var subjects = subjectStrs.map(function(str) {
+                               return jassa.rdf.NodeFactory.createUri(str);
+                           });
+
+                           var lookupService = new jassa.service.LookupServiceGraphSparql(sparqlService);
+
+                           var promise = lookupService.lookup(subjects);
+
+                           r = $q.when(promise).then(function(subjectToGraph) {
+                               var contextScope = scope.rexContext;
+                               var baseGraph = contextScope.baseGraph = contextScope.baseGraph || new jassa.rdf.GraphImpl();
+
+                               subjectToGraph.forEach(function(graph, subject) {
+                                   // Remove prior data from the graph
+                                   var pattern = new jassa.rdf.Triple(subject, null, null);
+                                   baseGraph.removeMatch(pattern);
+
+                                   baseGraph.addAll(graph);
+                               });
+
+                               // Add the updated data
+                               // TODO Add the data to the context
+                           });
+                       } else {
+                           r = Promise.resolve();
+                       }
+
+                       return r;
+                   };
+
+
+                    scope.$watchCollection('[rexSparqlService, rexLookup, rexPrefixMapping]', function() {
+                        updateSubjectGraphs();
+                    });
+
+                    scope.$watchCollection(getSubjects, function(subjects) {
+                        scope.rexContext.subjects = subjects;
+
+                        console.log('Subjects: ' + JSON.stringify(subjects));
+                        updateSubjectGraphs();
+                    });
+
 
                     // Make sure to initialize any provided context object
                     // TODO: The status should probably be part of the context directive, rather than a context object
@@ -2482,7 +2581,14 @@ angular.module('ui.jassa.rex')
         compile: function(ele, attrs){
             return {
                 pre: function(scope, ele, attrs, ctrls) {
-                    syncAttr($parse, scope, attrs, 'rexPredicate');
+
+                    // Sync rex-predicate to its resolved value
+                    syncAttr($parse, scope, attrs, 'rexPredicate', false, function(predicate) {
+                        var pm = scope.rexPrefixMapping;
+                        var r = pm ? pm.expandPrefix(predicate) : predicate;
+                        return r;
+                    });
+
                 }
             };
         }
@@ -2594,6 +2700,12 @@ angular.module('ui.jassa.rex')
 
 angular.module('ui.jassa.rex')
 
+/**
+ * rexSubject only registers the referenced subject at the rexContext.
+ *
+ * This way, the context knows what data needs to be re-fetched in case of a full reset (e.g. after an edit).
+ *
+ */
 .directive('rexSubject', ['$parse', '$q', function($parse, $q) {
     return {
         priority: 24,
@@ -2604,65 +2716,26 @@ angular.module('ui.jassa.rex')
         compile: function(ele, attrs) {
             return {
                 pre: function(scope, ele, attrs, contextCtrl) {
-
-                    var subjectUri = syncAttr($parse, scope, attrs, 'rexSubject');
-
-                    var doPrefetch = function() {
-                        //console.log('doPrefetch');
-
-                        var sparqlService = scope.rexSparqlService;
-                        var lookupEnabled = scope.rexLookup;
-                        var subjectUri = scope.rexSubject;
-
-                        //if(lookupFn && angular.isFunction(lookupFn) && subjectUri) {
-                        if(lookupEnabled && sparqlService && subjectUri) {
-
-                            var pm = scope.rexPrefixMapping;
-                            var uri = pm ? pm.expandPrefix(subjectUri) : subjectUri;
-
-                            var s = jassa.rdf.NodeFactory.createUri(uri);
-
-
-                            var promise = jassa.service.ServiceUtils.execDescribeViaSelect(sparqlService, [s]);
-
-                            // Notify the context that the subject is being loaded
-                            //rexContext.loading.add(s);
-
-                            //var promise = scope.rexLookup(s);
-                            $q.when(promise).then(function(graph) {
-                                var contextScope = contextCtrl.$scope.rexContext;
-                                var baseGraph = contextScope.baseGraph = contextScope.baseGraph || new jassa.rdf.GraphImpl();
-
-                                // Remove prior data from the graph
-                                var pattern = new jassa.rdf.Triple(s, null, null);
-                                contextScope.baseGraph.removeMatch(pattern);
-
-                                // Add the updated data
-                                contextScope.baseGraph.addAll(graph);
-                                // TODO Add the data to the context
-                            });
-                        }
-
-//                        $q.when(scope.rexContext.prefetch(s)).then(function() {
-//                            // make sure to apply the scope
-//                        });
-                    };
-
-                    scope.$watchCollection('[rexSparqlService, rexLookup, rexSubject, rexPrefixMapping]', function() {
-                        doPrefetch();
+                    syncAttr($parse, scope, attrs, 'rexSubject', false, function(subject) {
+                        var pm = scope.rexPrefixMapping;
+                        var r = pm ? pm.expandPrefix(subject) : subject;
+                        return r;
                     });
 
-//                    scope.$watch(function() {
-//                        return scope.rexSubject;
-//                    }, function(newVal) {
-//                        doPrefetch();
-//                    });
-//
-//                    scope.$watch(function() {
-//                        return scope.rexPrefixMapping;
-//                    }, function(pm) {
-//                        doPrefetch();
-//                    });
+                    scope.$on('destroy', function() {
+                        var contextScope = contextCtrl.$scope.rexContext;
+                        jassa.util.ObjectUtils.free(contextScope.refSubjects, scope.rexSubject);
+                    });
+
+
+                    var updateRegistration = function(now, old) {
+                        var contextScope = contextCtrl.$scope.rexContext;
+                        jassa.util.ObjectUtils.alloc(contextScope.refSubjects, now);
+                        jassa.util.ObjectUtils.free(contextScope.refSubjects, old);
+                    };
+
+                    updateRegistration(scope.rexSubject);
+                    scope.$watch('rexSubject', updateRegistration);
                 }
             };
         }
