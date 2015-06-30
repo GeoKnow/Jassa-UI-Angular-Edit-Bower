@@ -2,12 +2,113 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-04-09
+ * Version: 0.9.0-SNAPSHOT - 2015-06-30
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
+
 angular.module('ui.jassa.geometry-input', [])
 
+
+  /**
+   * @ngdoc interface
+   * @name ui.jassa.geometry-input.provider:GeocodingLookup
+   *
+   * @description
+   * This provider is usually used to set geocoding apis like NOKIA HERE,
+   * which will be requested when typing a location into the
+   * geocoding-input directive search input field.
+   * Furthermore you can enable/disable pre-defined geocoding apis.
+   *
+   * @example
+   <pre>
+   // use the .config section to set up the GeocodingLookupProvider
+   angular.module('mymodule', []).config(GeocodingLookupProvider) {
+     GeocodingLookupProvider.setService(serviceConfig);
+   };
+
+
+   // Set GeocodingLookupProvider configurations
+   GeocodingLookupProvider.setConfiguration({
+     // use both pre-configured services
+     service: ['LinkedGeoData', 'Nominatim'],
+     // if own services are set, also the pre-configured services will be used
+     defaultService: true
+   });
+
+   // Set up a rest service
+   GeocodingLookupProvider.setService({
+     label: 'Nokia HERE',
+     serviceType: 'rest',
+     url: 'http://geocoder.cit.api.here.com/6.2/geocode.json',
+     data: {
+       app_id: 'DemoAppId01082013GAL',
+       app_code: 'AJKnXv84fjrb0KIHawS0Tg',
+       additionaldata: 'IncludeShapeLevel,default',
+       mode: 'retrieveAddresses',
+       searchtext: '%KEYWORD%'
+     },
+     fnSuccess: function(response) {
+       var data = response.data.Response.View.length > 0 ? response.data.Response.View[0].Result : [];
+       var resultSet = [];
+       for(var i in data) {
+         if(data[i].Location.hasOwnProperty('Shape')) {
+           resultSet.push({
+             'firstInGroup': false,
+             'wkt': data[i].Location.Shape.Value,
+             'label': data[i].Location.Address.Label,
+             'group': 'Nokia HERE'
+           });
+         }
+       }
+       return resultSet;
+     }
+   });
+
+   // Set up a sparql service
+   GeocodingLookupProvider.setService({
+     label: 'LinkedGeoData (User Config)',
+     serviceType: 'sparql',
+     endpoint: 'http://linkedgeodata.org/vsparql',
+     graph: 'http://linkedgeodata.org/ne/',
+     prefix: {
+       ogc: 'http://www.opengis.net/ont/geosparql#',
+       geom: 'http://geovocab.org/geometry#'
+     },
+     query: '{'
+       +' Graph <http://linkedgeodata.org/ne/> {'
+       +' ?s a <http://linkedgeodata.org/ne/ontology/Country> ;'
+       +' rdfs:label ?l ;'
+       +' geom:geometry ['
+       +'  ogc:asWKT ?g'
+       +' ] '
+       +' FILTER regex(?l, "%KEYWORD%", "i") '
+       +' } '
+       +'}',
+     sponateTemplate: [{
+       id: '?s',
+       label: '?l',
+       wkt: '?g'
+     }],
+     limit: 5,
+     fnSuccess: function(response) {
+       var data = response;
+       var resultSet = [];
+       if (data.length > 0) {
+         for(var i in data) {
+           resultSet.push({
+             'firstInGroup': false,
+             'wkt': data[i].val.wkt,
+             'label': data[i].val.label,
+             'group': 'LinkedGeoData (User Config)'
+           });
+         }
+       }
+       return resultSet;
+     }
+   });
+   </pre>
+   */
   .provider('GeocodingLookup', function() {
 
     this.config = {
@@ -238,6 +339,8 @@ angular.module('ui.jassa.geometry-input', [])
             }
 
             return firstInGroupTrue(results);
+          }, function(response) {
+            console.err('Error during request', response);
           });
 
           return resultPromise;
@@ -245,16 +348,93 @@ angular.module('ui.jassa.geometry-input', [])
       };
     };
 
+
+    /**
+     * @ngdoc method
+     * @name ui.jassa.geometry-input.provider:GeocodingLookup#setService
+     * @methodOf ui.jassa.geometry-input.provider:GeocodingLookup
+     * @description Add a new geocoding service
+     * @param {Object} serviceConfig A new serviceConfig
+     */
     this.setService = function(serviceConfig) {
       this.userServices[serviceConfig.label] = serviceConfig;
     };
 
+
+
+    /**
+     * @ngdoc method
+     * @name ui.jassa.geometry-input.provider:GeocodingLookup#setConfiguration
+     * @methodOf ui.jassa.geometry-input.provider:GeocodingLookup
+     * @description
+     * Set configuration parameters. E.g. disable the
+     * pre-definied geocoding services.
+     *
+     * @param {Object} userConfig Configuration which will overwrite the default config
+     */
     this.setConfiguration = function(userConfig) {
       _(this.config).extend(userConfig);
     };
 
   })
 
+
+
+
+  /**
+   * @ngdoc directive
+   * @name ui.jassa.geometry-input.directive:geometryInput
+   * @element geometry-input
+   * @function
+   * @restrict EA
+   *
+   * @description
+   * This directives creates a map for setting/displaying a location on a map.
+   * Furthermore it is possible to draw/edit polygons, line, boxes and points.
+   *
+   * @example
+   <example module="geometryInputExample">
+   <file name="index.html">
+   <div ng-controller="AppCtrl">
+     <p>
+       <span>current model value: {{term.value}}</span>
+     </p>
+     <p>
+       <geometry-input ng-model="term.value"></geometry-input>
+     </p>
+   </div>
+   </file>
+   <file name="script.js">
+   jassa = new Jassa(Promise, $.ajax);
+   angular.module(
+   'geometryInputExample',
+   ['dddi', 'ngSanitize', 'ui.jassa', 'ui.bootstrap', 'ui.select', 'ui.jassa.edit', 'ui.jassa.rex', 'ui.codemirror', 'ngAnimate'])
+   .config(function(GeocodingLookupProvider) {
+       GeocodingLookupProvider.setConfiguration({
+       service: ['Nominatim'],
+       defaultService: true
+       });
+   })
+   .controller('AppCtrl', ['$scope', '$dddi', '$location', '$anchorScroll', '$timeout', '$http', '$q',
+   function($scope, $dddi, $location, $anchorScroll, $timeout, $http, $q) {
+
+      $scope.term = {
+        value: 'POLYGON((5.639629 55.426467,9.243144 47.164749,19.438457 51.559280,17.680644 57.887405,5.639629 55.426467))'
+      };
+
+      // Begin of REX Setup
+
+      $scope.defaultNgModelOptions = {
+          //updateOn: 'default blur',
+          debounce: {
+              'default': 300,
+              'blur': 0
+          }
+      };
+    }]);
+   </file>
+   </example>
+   */
   .directive('geometryInput', ['$http', '$q', 'GeocodingLookup', function($http, $q, GeocodingLookup) {
 
     var uniqueId = 1;
@@ -315,6 +495,7 @@ angular.module('ui.jassa.geometry-input', [])
               //scope.geometry-input-input = newValue;
               toggleControl();
             });
+
 
             function init() {
               // generate custom map id
@@ -485,6 +666,24 @@ var rdfTermInputCounter = 0;
 
 angular.module('ui.jassa.rdf-term-input', [])
 
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rdf-term-input.directive:rdfTermInput
+ * @element rdf-term-input
+ * @function
+ * @restrict EA
+ *
+ * @description
+ * This directives creates an input field for
+ * editing plain-, typed-, uri-literals. The user can switch
+ * instantly between them.
+ *
+ * @example
+ <doc:example module="ui.jassa.rdf-term-input" animations="true">
+ <doc:source>
+ </doc:source>
+ </doc:example>
+ */
 .directive('rdfTermInput', ['$parse', function($parse) {
 
     // Some vocab - later we could fetch labels on-demand based on the uris.
@@ -1555,7 +1754,16 @@ angular.module('ui.jassa.rex', ['dddi', 'ui.select']);
 
 angular.module('ui.jassa.rex')
 
-
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-context
+ * @element div
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexContext', ['$parse', '$q', '$dddi', function($parse, $q, $dddi) {
     return {
         priority: 30,
@@ -2076,7 +2284,16 @@ rexContext.addObject = function(_s, _p, sourceObj) {
 
 
 angular.module('ui.jassa.rex')
-
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-datatype
+ * @element rdf-term-input
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexDatatype', ['$parse', function($parse) {
     return {
         priority: 7,
@@ -2095,8 +2312,14 @@ angular.module('ui.jassa.rex')
 angular.module('ui.jassa.rex')
 
 /**
- * Directive to mark triples as deleted
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-deleted
+ * @element input
+ * @restrict A
+ * @function
  *
+ * @description
+ * Directive to mark triples as deleted
  */
 .directive('rexDeleted', ['$parse', function($parse) {
     return {
@@ -2116,9 +2339,16 @@ angular.module('ui.jassa.rex')
 angular.module('ui.jassa.rex')
 
 /**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-iri
+ * @element input
+ * @restrict A
+ * @function
+ *
+ * @description
  * Convenience directive
  *
- * rexObjectIri="model"
+ * <pre>rexObjectIri="model"</pre>
  *
  * implies rex-object rex-termtype="iri" rex-value="model"
  */
@@ -2162,6 +2392,16 @@ angular.module('ui.jassa.rex')
 
 angular.module('ui.jassa.rex')
 
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-lang
+ * @element rdf-term-type
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexLang', ['$parse', function($parse) {
     return {
         priority: 7,
@@ -2179,6 +2419,16 @@ angular.module('ui.jassa.rex')
 
 angular.module('ui.jassa.rex')
 
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-literal
+ * @element input
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexLiteral', ['$parse', '$compile', function($parse, $compile) {
     return {
         priority: 900,
@@ -2221,13 +2471,19 @@ angular.module('ui.jassa.rex')
 angular.module('ui.jassa.rex')
 
 /**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-lookup
+ * @element div
+ * @restrict A
+ * @function
+ *
+ * @description
  * Directive to attach a rex lookup function to the scope
  *
  * Different lookup functions can be used at different HTML regions under a rex-context.
  *
  * If present, rex-subject will use the provided function to perform data lookups
  * on its IRIs and store the content in the scope
- *
  */
 .directive('rexLookup', ['$parse', function($parse) {
     return {
@@ -2254,20 +2510,26 @@ angular.module('ui.jassa.rex')
 angular.module('ui.jassa.rex')
 
 /**
- * TODO rex-results may be conceptually a much cleaner approach - deprecated/remove this directive if it proofs true
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-nav-targets
+ * @element div
+ * @restrict A
+ * @function
  *
+ * @description
+ * <strong>TODO rex-results may be conceptually a much cleaner approach - deprecated/remove this directive if it proofs true</strong>
  *
  * Directive to refer to the set of URIs at a target
  *
- * rexNavTargets="arrayOfTargetIriStrings"
- *
- *
+ * <pre>rexNavTargets="arrayOfTargetIriStrings"</pre>
  *
  * Requires:
+ *
  * - rex-subject on any ancestor
  * - rex-nav-predicate present on the same element as rex-nav-targets
  *
  * Optional:
+ *
  * - rex-nav-inverse Whether to navigate the given predicate in inverse direction\
  *
  */
@@ -2391,10 +2653,17 @@ angular.module('ui.jassa.rex')
 angular.module('ui.jassa.rex')
 
 /**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-object
+ * @element div
+ * @restrict A
+ * @function
  *
+ * @description
  * rexObject takes an index to reference an object in a (conceptual) array under a given subject and predicate
  *
  * Hm, no, I still think we can do better: There are different ways to refer to a specific object:
+ *
  * - by index (the 3nd item under leipzig -> rdfs:label (possibly of a certain datatype and lang)
  * - by value (i am referring to the triple having leipzig -> population -> 500000)
  *   yet, we could generalize a value reference  to an index reference:
@@ -2402,18 +2671,19 @@ angular.module('ui.jassa.rex')
  *
  * So long story short: this directive references an item in regard to a set of filters.
  *
- *
- * TODO Update below
+ * <strong>TODO Update below</strong>
  *
  * Note that this directive only creates a context for setting components
  * (term type, value, datatype and language tag) of an object -
  * it does not create an rdf.Node object directly.
  *
- * rex-object="{}" // someObject
+ * <pre>rex-object="{}" // someObject</pre>
+ *
  * The argument is optional.
  *
  * If one is provided, it is as a reference to an object being built, otherwise
  * a new object is allocated.
+ *
  * The provided object is registered at the object for the
  * corresponding predicate and subject in the context where it is used.
  *
@@ -2506,6 +2776,16 @@ angular.module('ui.jassa.rex')
 
 angular.module('ui.jassa.rex')
 
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-predicate
+ * @element input
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexPredicate', ['$parse', function($parse) {
     return {
         priority: 17,
@@ -2535,16 +2815,21 @@ angular.module('ui.jassa.rex')
 ;
 
 angular.module('ui.jassa.rex')
-
 /**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-prefix
+ * @element div
+ * @restrict A
+ * @function
+ *
+ * @description
  * Prefixes
  *
  * prefixes must be declared together with the context and cannot be nested
- *
  */
 .directive('rexPrefix', ['$parse', function($parse) {
     return {
-        priority: 19,
+        priority: 25,
         restrict: 'A',
         scope: true,
         //require: '^rexContext',
@@ -2616,7 +2901,16 @@ angular.module('ui.jassa.rex')
 ;
 
 angular.module('ui.jassa.rex')
-
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-sparql-service
+ * @element div
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexSparqlService', ['$parse', function($parse) {
     return {
         priority: 30,
@@ -2636,12 +2930,17 @@ angular.module('ui.jassa.rex')
 ;
 
 angular.module('ui.jassa.rex')
-
 /**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-subject
+ * @element form
+ * @restrict A
+ * @function
+ *
+ * @description
  * rexSubject only registers the referenced subject at the rexContext.
  *
  * This way, the context knows what data needs to be re-fetched in case of a full reset (e.g. after an edit).
- *
  */
 .directive('rexSubject', ['$parse', '$q', function($parse, $q) {
     return {
@@ -2653,6 +2952,9 @@ angular.module('ui.jassa.rex')
         compile: function(ele, attrs) {
             return {
                 pre: function(scope, ele, attrs, contextCtrl) {
+                    //var dddi = $dddi(scope);
+                    //dddi.register('rexSubject', []
+
                     syncAttr($parse, scope, attrs, 'rexSubject', false, function(subject) {
                         var pm = scope.rexPrefixMapping;
                         var r = pm ? pm.expandPrefix(subject) : subject;
@@ -2682,22 +2984,28 @@ angular.module('ui.jassa.rex')
 ;
 
 angular.module('ui.jassa.rex')
-
 /**
- * TODO: Actually we should just implement this as a convenience directive which replaces itself with
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-term
+ * @element rex-term
+ * @restrict A
+ * @function
+ *
+ * @description
+ * <strong>TODO: Actually we should just implement this as a convenience directive which replaces itself with</strong>
+ *
  * rex-termtype rex-value rex-lang and rex-datatype
+ *
  * This way we wouldn't have to make the book keeping more complex than it already is
  *
  * rexTerm synchronizes a model which is interpreted as an object in a talis RDF json and
  * thus provides the fields 'type', 'value', 'datatype' and 'lang'.
  *
- * <rdf-term-input ng-model="model" rex-term="model"></rdf-term-input>
+ * <pre><rdf-term-input ng-model="model" rex-term="model"></rdf-term-input></pre>
  *
- * If rex-term appears on a directive using a model attribute   , it can be shortened as shown below:
+ * If rex-term appears on a directive using a model attribute, it can be shortened as shown below:
  *
- * <rdf-term-input ng-model="model" rex-term></rdf-term-input>
- *
- *
+ * <pre><rdf-term-input ng-model="model" rex-term></rdf-term-input></pre>
  */
 .directive('rexTerm', ['$parse', '$compile', function($parse, $compile) {
     return {
@@ -2741,6 +3049,16 @@ angular.module('ui.jassa.rex')
 
 angular.module('ui.jassa.rex')
 
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-termtype
+ * @element rdf-term-input
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexTermtype', ['$parse', function($parse) {
     return {
         priority: 10,
@@ -2757,8 +3075,14 @@ angular.module('ui.jassa.rex')
 ;
 
 angular.module('ui.jassa.rex')
-
 /**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-typeof
+ * @element form
+ * @restrict A
+ * @function
+ *
+ * @description
  * Convenience directive
  *
  * implies rex-prediacte="rdf:type" rex-iri
@@ -2797,7 +3121,16 @@ angular.module('ui.jassa.rex')
 ;
 
 angular.module('ui.jassa.rex')
-
+/**
+ * @ngdoc directive
+ * @name ui.jassa.rex.directive:rex-value
+ * @element rdf-term-input
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of rex-directive.
+ */
 .directive('rexValue', ['$parse', function($parse) {
     return {
         priority: 4,
@@ -2884,11 +3217,17 @@ var syncHelper = function(scope, attrs, $parse, $interpolate, sourceAttr, target
 angular.module('ui.jassa.sync', []);
 
 angular.module('ui.jassa.sync')
-
 /**
+ * @ngdoc directive
+ * @name ui.jassa.sync.directive:sync-template
+ * @element input
+ * @restrict A
+ * @function
+ *
+ * @description
  * Convenience directive
  *
- * sync-template="templateStr"
+ * <pre>sync-template="templateStr"</pre>
  *
  * implies sync-source="templateStr" sync-interpolate sync-to-target? sync-target?
  *
@@ -2938,7 +3277,16 @@ angular.module('ui.jassa.sync')
 ;
 
 angular.module('ui.jassa.sync')
-
+/**
+ * @ngdoc directive
+ * @name ui.jassa.sync.directive:sync-to-source
+ * @element sync-to-source
+ * @restrict A
+ * @function
+ *
+ * @description
+ * Description of sync-directive.
+ */
 .directive('syncToSource', ['$parse', '$interpolate', function($parse, $interpolate) {
     return {
         priority: 390,
@@ -2961,6 +3309,18 @@ angular.module('ui.jassa.sync')
 angular.module('ui.jassa.sync')
 
 // sync-to-target="toString"
+/**
+ * @ngdoc directive
+ * @name ui.jassa.sync.directive:sync-to-target
+ * @element input
+ * @restrict A
+ * @function
+ *
+ * @description
+ * <pre>sync-to-target="toString"</pre>
+ * @example
+ * <pre>sync-to-target="toString"</pre>
+ */
 .directive('syncToTarget', ['$parse', '$interpolate', function($parse, $interpolate) {
     return {
         priority: 390,
