@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-06-30
+ * Version: 0.9.0-SNAPSHOT - 2015-08-21
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.edit.tpls", "ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -1918,7 +1918,9 @@ angular.module('ui.jassa.rex')
                                 return true;
                             });
 
-                            r = $q.when(r);
+                            r = $q.when(r).then(angular.noop).then(angular.noop, function() {
+                                console.error('error while rexContext.reset');
+                            });
 
                             return r;
                         };
@@ -1990,14 +1992,18 @@ angular.module('ui.jassa.rex')
 
 
                     scope.$watchCollection('[rexSparqlService, rexLookup, rexPrefixMapping]', function() {
-                        $q.when(updateSubjectGraphs());
+                        $q.when(updateSubjectGraphs()).then(angular.noop).then(angular.noop, function() {
+                            console.error('error while watching rexSparqlService, rexLookup, rexPrefixMapping');
+                        });
                     });
 
                     scope.$watchCollection(getSubjects, function(subjects) {
                         scope.rexContext.subjects = subjects;
 
                         console.log('Subjects: ' + JSON.stringify(subjects));
-                        $q.when(updateSubjectGraphs());
+                        $q.when(updateSubjectGraphs()).then(angular.noop).then(angular.noop, function() {
+                            console.error('error while watching getSubjects');
+                        });
                     });
 
 
