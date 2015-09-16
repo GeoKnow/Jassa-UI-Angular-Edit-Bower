@@ -2,7 +2,7 @@
  * jassa-ui-angular-edit
  * https://github.com/GeoKnow/Jassa-UI-Angular
 
- * Version: 0.9.0-SNAPSHOT - 2015-08-21
+ * Version: 0.9.0-SNAPSHOT - 2015-09-17
  * License: BSD
  */
 angular.module("ui.jassa.edit", ["ui.jassa.geometry-input","ui.jassa.rdf-term-input","ui.jassa.rex","ui.jassa.sync"]);
@@ -441,7 +441,7 @@ angular.module('ui.jassa.geometry-input', [])
 
     return {
       restrict: 'EA',
-      priority: 4,
+      //priority: 4,
       require: '?ngModel',
       templateUrl: 'template/geometry-input/geometry-input.html',
       replace: true,
